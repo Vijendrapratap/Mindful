@@ -350,9 +350,15 @@ async def get_ai_response(conversation_id: str, user_message: str, conversation_
         # Get conversation history
         conversation = await db.conversations.find_one({'_id': ObjectId(conversation_id)})
         
+        # Get profile for knowledge graph context
+        profile = await get_or_create_profile()
+        
+        # Retrieve relevant context from knowledge graph
+        context = await retrieve_knowledge_context(profile['id'], user_message)
+        
         # Create system message based on type
         if conversation_type == "journal":
-            system_message = """You are MindfulMe, a warm and compassionate journaling companion. 
+            system_message = f"""You are MindfulMe, a warm and compassionate journaling companion. 
             Your role is to help users reflect on their day through natural conversation.
             
             Guidelines:
@@ -364,12 +370,17 @@ async def get_ai_response(conversation_id: str, user_message: str, conversation_
             - Help users process their day, not solve their problems
             - Use conversational language, like a caring friend
             
+            Context about the user (from previous conversations):
+            {context}
+            
+            Use this context naturally when relevant, but don't force it into every response.
+            
             Example responses:
             - "That sounds like it was challenging. What made it particularly difficult for you?"
             - "I hear excitement in what you're sharing! What part of that experience felt most meaningful?"
-            - "It seems like that really affected you. How are you feeling about it now?"""
+            - "It seems like that really affected you. How are you feeling about it now?\""""
         else:  # chat
-            system_message = """You are MindfulMe, a supportive mental wellness companion and friend.
+            system_message = f"""You are MindfulMe, a supportive mental wellness companion and friend.
             Your role is to provide a safe, non-judgmental space for users to talk about their thoughts and feelings.
             
             Guidelines:
@@ -381,6 +392,12 @@ async def get_ai_response(conversation_id: str, user_message: str, conversation_
             - Keep responses concise but meaningful (3-4 sentences)
             - Show genuine interest in understanding their perspective
             - Recognize when to offer comfort vs. when to ask deeper questions
+            
+            Context about the user (from previous conversations):
+            {context}
+            
+            Use this context to show you remember them and care about their journey.
+            Reference past events naturally when appropriate.
             
             Remember: You're here to listen, understand, and support - not to fix or diagnose."""
         
@@ -396,6 +413,14 @@ async def get_ai_response(conversation_id: str, user_message: str, conversation_
         
         # Get response
         response = await chat.send_message(message)
+        
+        # Extract knowledge in background (don't wait for it)
+        asyncio.create_task(extract_knowledge_from_message(
+            profile['id'], 
+            conversation_id, 
+            user_message, 
+            response
+        ))
         
         return response
         
