@@ -244,7 +244,7 @@ class MindfulMeAPITester:
                         ai_content = ai_msg.get('content', '').lower()
                         
                         # Check for journal-specific responses (deeper reflection)
-                        reflection_indicators = ['what made', 'how did', 'tell me more', 'explore', 'reflect']
+                        reflection_indicators = ['what made', 'how did', 'tell me more', 'explore', 'reflect', 'what was it', 'particular moment', 'stands out', 'what about']
                         has_reflection = any(indicator in ai_content for indicator in reflection_indicators)
                         
                         if has_reflection:
