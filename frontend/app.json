@@ -1,21 +1,35 @@
 {
   "expo": {
-    "name": "frontend",
-    "slug": "frontend",
+    "name": "MindfulMe",
+    "slug": "mindfulme",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "frontend",
-    "userInterfaceStyle": "automatic",
+    "scheme": "mindfulme",
+    "userInterfaceStyle": "dark",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.mindfulme.app",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Capture photos for journal entries",
+        "NSPhotoLibraryUsageDescription": "Add photos to your journal",
+        "NSMicrophoneUsageDescription": "Record voice notes for journaling",
+        "NSPhotoLibraryAddUsageDescription": "Save photos in your journal"
+      }
     },
     "android": {
+      "package": "com.mindfulme.app",
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#000"
       },
+      "permissions": [
+        "CAMERA",
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE",
+        "RECORD_AUDIO"
+      ],
       "edgeToEdgeEnabled": true
     },
     "web": {
