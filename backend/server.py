@@ -62,6 +62,9 @@ class JournalEntry(BaseModel):
     date: str  # YYYY-MM-DD
     conversationId: str
     mood: Optional[str] = None
+    emotion: Optional[str] = None  # happy, sad, anxious, calm, excited, etc.
+    images: List[str] = []  # base64 encoded images
+    voiceRecording: Optional[str] = None  # base64 encoded audio
     keyTopics: List[str] = []
     summary: Optional[str] = None
     createdAt: datetime = Field(default_factory=datetime.utcnow)
