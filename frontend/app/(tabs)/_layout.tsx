@@ -6,18 +6,22 @@ export default function TabsLayout() {
     <Tabs
       screenOptions={{
         headerShown: false,
-        tabBarActiveTintColor: '#7C3AED',
-        tabBarInactiveTintColor: '#9CA3AF',
+        tabBarActiveTintColor: '#A78BFA',
+        tabBarInactiveTintColor: '#6B7280',
         tabBarStyle: {
-          backgroundColor: '#1F1F1F',
-          borderTopColor: '#374151',
-          height: 60,
-          paddingBottom: 8,
-          paddingTop: 8,
+          backgroundColor: 'rgba(15, 15, 15, 0.95)',
+          borderTopColor: 'rgba(167, 139, 250, 0.2)',
+          borderTopWidth: 1,
+          height: 65,
+          paddingBottom: 10,
+          paddingTop: 10,
+          position: 'absolute',
+          elevation: 0,
         },
         tabBarLabelStyle: {
-          fontSize: 12,
-          fontWeight: '500',
+          fontSize: 11,
+          fontWeight: '600',
+          marginTop: 4,
         },
       }}
     >
@@ -26,7 +30,7 @@ export default function TabsLayout() {
         options={{
           title: 'Chat',
           tabBarIcon: ({ color, size }) => (
-            <MaterialCommunityIcons name="chat-processing" size={size} color={color} />
+            <MaterialCommunityIcons name="chat-processing" size={26} color={color} />
           ),
         }}
       />
@@ -35,16 +39,7 @@ export default function TabsLayout() {
         options={{
           title: 'Journal',
           tabBarIcon: ({ color, size }) => (
-            <MaterialCommunityIcons name="book-open-variant" size={size} color={color} />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="mood"
-        options={{
-          title: 'Mood',
-          tabBarIcon: ({ color, size }) => (
-            <MaterialCommunityIcons name="emoticon-happy-outline" size={size} color={color} />
+            <MaterialCommunityIcons name="book-open-variant" size={26} color={color} />
           ),
         }}
       />
@@ -53,7 +48,7 @@ export default function TabsLayout() {
         options={{
           title: 'Profile',
           tabBarIcon: ({ color, size }) => (
-            <MaterialCommunityIcons name="account-circle" size={size} color={color} />
+            <MaterialCommunityIcons name="account-circle" size={26} color={color} />
           ),
         }}
       />
