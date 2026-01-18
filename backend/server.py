@@ -209,6 +209,141 @@ async def update_streak(date_str: str):
     
     return await get_or_create_profile()
 
+async def retrieve_knowledge_context(profile_id: str, user_message: str) -> str:
+    """Retrieve relevant context from knowledge graph based on user message"""
+    try:
+        # Get recent nodes and edges for this profile
+        recent_nodes = await db.knowledge_nodes.find(
+            {'profileId': profile_id}
+        ).sort('lastMentioned', -1).limit(20).to_list(20)
+        
+        recent_edges = await db.knowledge_edges.find(
+            {'profileId': profile_id}
+        ).sort('lastUpdated', -1).limit(15).to_list(15)
+        
+        if not recent_nodes:
+            return "No previous context available."
+        
+        # Build context string
+        context_parts = []
+        
+        # Add key entities
+        entities = [node for node in recent_nodes if node['mentionCount'] > 1][:10]
+        if entities:
+            entity_names = [f"{node['entityName']} ({node['entityType']})" for node in entities]
+            context_parts.append(f"Key people/things mentioned: {', '.join(entity_names)}")
+        
+        # Add recent relationships
+        if recent_edges:
+            relationships = []
+            for edge in recent_edges[:5]:
+                source_node = next((n for n in recent_nodes if str(n['_id']) == edge['sourceNodeId']), None)
+                target_node = next((n for n in recent_nodes if str(n['_id']) == edge['targetNodeId']), None)
+                if source_node and target_node:
+                    relationships.append(f"{source_node['entityName']} {edge['relationshipType']} {target_node['entityName']}")
+            
+            if relationships:
+                context_parts.append(f"Recent connections: {'; '.join(relationships)}")
+        
+        return " | ".join(context_parts) if context_parts else "No specific context available."
+        
+    except Exception as e:
+        logger.error(f"Error retrieving knowledge context: {str(e)}")
+        return "Context retrieval unavailable."
+
+async def extract_knowledge_from_message(profile_id: str, conversation_id: str, user_message: str, ai_response: str):
+    """Extract knowledge entities and relationships from conversation"""
+    try:
+        # Simple extraction logic - in production, you'd use NLP/LLM for this
+        # For now, we'll do basic keyword extraction
+        
+        # Extract potential entities (simplified approach)
+        import re
+        
+        # Look for people (capitalized names)
+        people = re.findall(r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b', user_message)
+        people = [p for p in people if len(p.split()) <= 3 and p not in ['I', 'My', 'The', 'This', 'That']]
+        
+        # Look for emotions
+        emotions = ['happy', 'sad', 'angry', 'excited', 'anxious', 'calm', 'frustrated', 'grateful', 'worried', 'content']
+        found_emotions = [emotion for emotion in emotions if emotion in user_message.lower()]
+        
+        # Look for activities (basic patterns)
+        activity_patterns = [r'went to (\w+)', r'had (\w+)', r'did (\w+)', r'played (\w+)', r'watched (\w+)']
+        activities = []
+        for pattern in activity_patterns:
+            matches = re.findall(pattern, user_message.lower())
+            activities.extend(matches)
+        
+        # Store extracted entities
+        extracted_nodes = []
+        extracted_edges = []
+        
+        # Store people
+        for person in people[:3]:  # Limit to avoid spam
+            node = await store_or_update_node(profile_id, 'Person', person)
+            if node:
+                extracted_nodes.append(str(node['_id']))
+        
+        # Store emotions
+        for emotion in found_emotions[:2]:
+            node = await store_or_update_node(profile_id, 'Emotion', emotion)
+            if node:
+                extracted_nodes.append(str(node['_id']))
+        
+        # Store activities
+        for activity in activities[:2]:
+            node = await store_or_update_node(profile_id, 'Activity', activity)
+            if node:
+                extracted_nodes.append(str(node['_id']))
+        
+        # Log the extraction
+        extraction_log = ExtractionLog(
+            profileId=profile_id,
+            conversationId=conversation_id,
+            messageContent=user_message,
+            extractedNodes=extracted_nodes,
+            extractedEdges=extracted_edges
+        )
+        await db.extraction_logs.insert_one(extraction_log.dict(exclude={'id'}))
+        
+    except Exception as e:
+        logger.error(f"Error extracting knowledge: {str(e)}")
+
+async def store_or_update_node(profile_id: str, entity_type: str, entity_name: str):
+    """Store or update a knowledge node"""
+    try:
+        # Check if node already exists
+        existing = await db.knowledge_nodes.find_one({
+            'profileId': profile_id,
+            'entityType': entity_type,
+            'entityName': entity_name
+        })
+        
+        if existing:
+            # Update existing node
+            await db.knowledge_nodes.update_one(
+                {'_id': existing['_id']},
+                {
+                    '$set': {'lastMentioned': datetime.utcnow()},
+                    '$inc': {'mentionCount': 1}
+                }
+            )
+            return existing
+        else:
+            # Create new node
+            node = KnowledgeNode(
+                profileId=profile_id,
+                entityType=entity_type,
+                entityName=entity_name
+            )
+            result = await db.knowledge_nodes.insert_one(node.dict(exclude={'id'}))
+            return await db.knowledge_nodes.find_one({'_id': result.inserted_id})
+            
+    except Exception as e:
+        logger.error(f"Error storing knowledge node: {str(e)}")
+        return None
+
 async def get_ai_response(conversation_id: str, user_message: str, conversation_type: str):
     """Get AI response using Claude via emergentintegrations"""
     try:
