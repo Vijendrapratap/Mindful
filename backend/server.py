@@ -108,6 +108,38 @@ class UserProfile(BaseModel):
     }
     createdAt: datetime = Field(default_factory=datetime.utcnow)
 
+# Knowledge Graph Models
+class KnowledgeNode(BaseModel):
+    id: Optional[str] = None
+    profileId: str
+    entityType: str  # Person, Event, Emotion, Habit, Goal, Trigger, Place, Activity, Interest
+    entityName: str
+    properties: dict = {}  # Additional attributes
+    confidence: float = 1.0  # Confidence score for this entity
+    firstMentioned: datetime = Field(default_factory=datetime.utcnow)
+    lastMentioned: datetime = Field(default_factory=datetime.utcnow)
+    mentionCount: int = 1
+
+class KnowledgeEdge(BaseModel):
+    id: Optional[str] = None
+    profileId: str
+    sourceNodeId: str
+    targetNodeId: str
+    relationshipType: str  # experienced, caused, triggers, enjoys, avoids, related_to, works_at, lives_in
+    properties: dict = {}
+    confidence: float = 1.0
+    createdAt: datetime = Field(default_factory=datetime.utcnow)
+    lastUpdated: datetime = Field(default_factory=datetime.utcnow)
+
+class ExtractionLog(BaseModel):
+    id: Optional[str] = None
+    profileId: str
+    conversationId: str
+    messageContent: str
+    extractedNodes: List[str] = []  # Node IDs
+    extractedEdges: List[str] = []  # Edge IDs
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+
 # ==================== HELPER FUNCTIONS ====================
 
 def serialize_doc(doc):
