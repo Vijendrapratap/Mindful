@@ -677,6 +677,74 @@ async def get_mood_stats(days: int = 30):
         "moodDistribution": mood_counts
     }
 
+# Knowledge Graph endpoints
+@api_router.get("/knowledge/nodes")
+async def get_knowledge_nodes(limit: int = 50):
+    """Get knowledge nodes for the user"""
+    profile = await get_or_create_profile()
+    nodes = await db.knowledge_nodes.find(
+        {'profileId': profile['id']}
+    ).sort('lastMentioned', -1).limit(limit).to_list(limit)
+    return [serialize_doc(node) for node in nodes]
+
+@api_router.get("/knowledge/edges")
+async def get_knowledge_edges(limit: int = 50):
+    """Get knowledge edges for the user"""
+    profile = await get_or_create_profile()
+    edges = await db.knowledge_edges.find(
+        {'profileId': profile['id']}
+    ).sort('lastUpdated', -1).limit(limit).to_list(limit)
+    return [serialize_doc(edge) for edge in edges]
+
+@api_router.get("/knowledge/graph")
+async def get_knowledge_graph():
+    """Get complete knowledge graph for visualization"""
+    profile = await get_or_create_profile()
+    
+    # Get nodes and edges
+    nodes = await db.knowledge_nodes.find(
+        {'profileId': profile['id']}
+    ).sort('mentionCount', -1).limit(100).to_list(100)
+    
+    edges = await db.knowledge_edges.find(
+        {'profileId': profile['id']}
+    ).limit(100).to_list(100)
+    
+    return {
+        "nodes": [serialize_doc(node) for node in nodes],
+        "edges": [serialize_doc(edge) for edge in edges]
+    }
+
+@api_router.get("/knowledge/stats")
+async def get_knowledge_stats():
+    """Get knowledge graph statistics"""
+    profile = await get_or_create_profile()
+    
+    # Count nodes by type
+    node_pipeline = [
+        {"$match": {"profileId": profile['id']}},
+        {"$group": {"_id": "$entityType", "count": {"$sum": 1}}}
+    ]
+    node_stats = await db.knowledge_nodes.aggregate(node_pipeline).to_list(100)
+    
+    # Count edges by type
+    edge_pipeline = [
+        {"$match": {"profileId": profile['id']}},
+        {"$group": {"_id": "$relationshipType", "count": {"$sum": 1}}}
+    ]
+    edge_stats = await db.knowledge_edges.aggregate(edge_pipeline).to_list(100)
+    
+    # Total counts
+    total_nodes = await db.knowledge_nodes.count_documents({'profileId': profile['id']})
+    total_edges = await db.knowledge_edges.count_documents({'profileId': profile['id']})
+    
+    return {
+        "totalNodes": total_nodes,
+        "totalEdges": total_edges,
+        "nodesByType": {stat['_id']: stat['count'] for stat in node_stats},
+        "edgesByType": {stat['_id']: stat['count'] for stat in edge_stats}
+    }
+
 # Include router
 app.include_router(api_router)
 
