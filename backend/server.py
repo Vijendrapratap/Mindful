@@ -73,6 +73,9 @@ class JournalCreate(BaseModel):
     date: str
     conversationId: str
     mood: Optional[str] = None
+    emotion: Optional[str] = None
+    images: List[str] = []
+    voiceRecording: Optional[str] = None
 
 class MoodLog(BaseModel):
     id: Optional[str] = None
