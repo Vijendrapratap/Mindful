@@ -132,6 +132,7 @@ async def update_streak(date_str: str):
     if not profile.get('lastJournalDate'):
         # First journal entry
         new_streak = 1
+        days_diff = 1  # First entry counts as 1 day
     else:
         last_date = datetime.strptime(profile['lastJournalDate'], '%Y-%m-%d').date()
         days_diff = (today - last_date).days
