@@ -347,9 +347,6 @@ async def store_or_update_node(profile_id: str, entity_type: str, entity_name: s
 async def get_ai_response(conversation_id: str, user_message: str, conversation_type: str):
     """Get AI response using Claude via emergentintegrations"""
     try:
-        # Get conversation history
-        conversation = await db.conversations.find_one({'_id': ObjectId(conversation_id)})
-        
         # Get profile for knowledge graph context
         profile = await get_or_create_profile()
         
