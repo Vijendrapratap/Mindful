@@ -256,13 +256,76 @@ async def get_profile():
     return profile
 
 @api_router.put("/profile")
-async def update_profile(preferences: dict):
+async def update_profile(profile_data: dict):
     profile = await get_or_create_profile()
     await db.profiles.update_one(
         {'_id': ObjectId(profile['id'])},
-        {'$set': {'preferences': preferences}}
+        {'$set': profile_data}
     )
     return await get_or_create_profile()
+
+# Personality test endpoint
+@api_router.post("/personality-test")
+async def submit_personality_test(answers: dict):
+    """
+    Process personality test answers and return personality type
+    Simple Big Five-inspired personality test
+    """
+    profile = await get_or_create_profile()
+    
+    # Calculate traits based on answers (simplified scoring)
+    traits = {
+        "openness": answers.get("openness", 50),
+        "conscientiousness": answers.get("conscientiousness", 50),
+        "extraversion": answers.get("extraversion", 50),
+        "agreeableness": answers.get("agreeableness", 50),
+        "neuroticism": answers.get("neuroticism", 50)
+    }
+    
+    # Determine personality type based on dominant traits
+    personality_type = determine_personality_type(traits)
+    
+    await db.profiles.update_one(
+        {'_id': ObjectId(profile['id'])},
+        {'$set': {
+            'personalityType': personality_type,
+            'personalityTraits': traits
+        }}
+    )
+    
+    return {
+        "personalityType": personality_type,
+        "traits": traits,
+        "description": get_personality_description(personality_type)
+    }
+
+def determine_personality_type(traits: dict) -> str:
+    """Determine personality type based on trait scores"""
+    # Simplified personality typing
+    if traits["extraversion"] > 60 and traits["openness"] > 60:
+        return "The Enthusiast"
+    elif traits["conscientiousness"] > 60 and traits["agreeableness"] > 60:
+        return "The Supporter"
+    elif traits["openness"] > 60 and traits["conscientiousness"] > 60:
+        return "The Thinker"
+    elif traits["extraversion"] > 60 and traits["agreeableness"] > 60:
+        return "The Socializer"
+    elif traits["neuroticism"] < 40 and traits["conscientiousness"] > 60:
+        return "The Achiever"
+    else:
+        return "The Balanced"
+
+def get_personality_description(personality_type: str) -> str:
+    """Get description for personality type"""
+    descriptions = {
+        "The Enthusiast": "You're energetic, creative, and always seeking new experiences. You thrive on variety and bringing fresh ideas to life.",
+        "The Supporter": "You're reliable, caring, and deeply value harmony. You excel at creating supportive environments and helping others succeed.",
+        "The Thinker": "You're analytical, curious, and love deep diving into complex topics. You bring careful consideration to everything you do.",
+        "The Socializer": "You're warm, outgoing, and naturally connect with others. You bring people together and create positive social experiences.",
+        "The Achiever": "You're driven, organized, and thrive on accomplishing goals. You bring structure and determination to your pursuits.",
+        "The Balanced": "You have a well-rounded personality with strengths across multiple areas. You adapt well to different situations."
+    }
+    return descriptions.get(personality_type, "A unique individual with their own special strengths.")
 
 # Conversation endpoints
 @api_router.post("/conversations")
