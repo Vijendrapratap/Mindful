@@ -265,22 +265,24 @@ class MindfulMeAPITester:
         print("\n=== Testing Journals ===")
         
         today = datetime.now().strftime('%Y-%m-%d')
-        yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
+        # Use a future date to ensure we create a new journal entry
+        future_date = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')
         
         # Test POST /api/journals - create journal entry
         if self.journal_conversation_id:
             try:
                 journal_data = {
-                    "date": today,
+                    "date": future_date,
                     "conversationId": self.journal_conversation_id,
-                    "mood": "good"
+                    "mood": "excellent"
                 }
                 response = self.session.post(f"{self.base_url}/journals", json=journal_data)
                 if response.status_code == 200:
                     journal = response.json()
-                    if (journal.get('date') == today and 
+                    if (journal.get('date') == future_date and 
                         journal.get('conversationId') == self.journal_conversation_id and
-                        'id' in journal):
+                        'id' in journal and
+                        journal.get('mood') == 'excellent'):
                         self.log_test("POST /journals", True, "Journal entry created successfully")
                         
                         # Test streak update by checking profile
