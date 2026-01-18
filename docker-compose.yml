@@ -1,0 +1,60 @@
+version: '3.8'
+
+services:
+  mongodb:
+    image: mongo:7.0
+    container_name: mindfulme-mongodb
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    environment:
+      MONGO_INITDB_DATABASE: mindfulme
+    networks:
+      - mindfulme-network
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: mindfulme-backend
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+    environment:
+      - MONGO_URL=mongodb://mongodb:27017
+      - DB_NAME=mindfulme
+      - EMERGENT_LLM_KEY=${EMERGENT_LLM_KEY}
+    depends_on:
+      - mongodb
+    networks:
+      - mindfulme-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/api/"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: mindfulme-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - EXPO_PUBLIC_BACKEND_URL=http://backend:8001
+    depends_on:
+      - backend
+    networks:
+      - mindfulme-network
+
+volumes:
+  mongodb_data:
+    driver: local
+
+networks:
+  mindfulme-network:
+    driver: bridge

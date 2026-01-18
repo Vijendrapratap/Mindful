@@ -1,0 +1,18 @@
+# Frontend Dockerfile for Production (Expo)
+FROM node:18-alpine
+
+# Set working directory
+WORKDIR /app
+
+# Install dependencies
+COPY frontend/package.json frontend/yarn.lock ./
+RUN yarn install --frozen-lockfile
+
+# Copy application code
+COPY frontend/ .
+
+# Expose port
+EXPOSE 3000
+
+# Start Expo
+CMD ["yarn", "start", "--port", "3000"]

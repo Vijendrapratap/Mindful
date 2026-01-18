@@ -1,0 +1,127 @@
+name: MindfulMe CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  # Backend Tests
+  test-backend:
+    runs-on: ubuntu-latest
+    
+    services:
+      mongodb:
+        image: mongo:7.0
+        ports:
+          - 27017:27017
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        cd backend
+        pip install -r requirements.txt
+    
+    - name: Lint with ruff
+      run: |
+        pip install ruff
+        ruff check backend/
+    
+    - name: Run tests
+      run: |
+        cd backend
+        # Add your test command here
+        # pytest tests/
+    
+    - name: Check API health
+      run: |
+        cd backend
+        python server.py &
+        sleep 10
+        curl http://localhost:8001/api/ || exit 1
+
+  # Frontend Tests
+  test-frontend:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18'
+    
+    - name: Install dependencies
+      run: |
+        cd frontend
+        yarn install --frozen-lockfile
+    
+    - name: Lint
+      run: |
+        cd frontend
+        yarn lint
+    
+    - name: Type check
+      run: |
+        cd frontend
+        npx tsc --noEmit
+
+  # Build Docker Images
+  build:
+    needs: [test-backend, test-frontend]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v2
+    
+    - name: Login to Docker Hub
+      uses: docker/login-action@v2
+      with:
+        username: ${{ secrets.DOCKER_USERNAME }}
+        password: ${{ secrets.DOCKER_PASSWORD }}
+    
+    - name: Build and push backend
+      uses: docker/build-push-action@v4
+      with:
+        context: .
+        file: ./Dockerfile.backend
+        push: true
+        tags: |
+          ${{ secrets.DOCKER_USERNAME }}/mindfulme-backend:latest
+          ${{ secrets.DOCKER_USERNAME }}/mindfulme-backend:${{ github.sha }}
+    
+    - name: Build and push frontend
+      uses: docker/build-push-action@v4
+      with:
+        context: .
+        file: ./Dockerfile.frontend
+        push: true
+        tags: |
+          ${{ secrets.DOCKER_USERNAME }}/mindfulme-frontend:latest
+          ${{ secrets.DOCKER_USERNAME }}/mindfulme-frontend:${{ github.sha }}
+
+  # Deploy (optional - configure based on your hosting)
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+    - name: Deploy to production
+      run: |
+        echo "Add your deployment commands here"
+        # Example: SSH to server and pull latest images
+        # ssh user@server 'cd /app && docker-compose pull && docker-compose up -d'
