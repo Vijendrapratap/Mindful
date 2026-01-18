@@ -91,11 +91,20 @@ class MoodCreate(BaseModel):
 
 class UserProfile(BaseModel):
     id: Optional[str] = None
+    name: Optional[str] = None
+    age: Optional[int] = None
+    profilePic: Optional[str] = None  # base64 encoded image
     currentStreak: int = 0
     longestStreak: int = 0
     totalJournalDays: int = 0
     lastJournalDate: Optional[str] = None  # YYYY-MM-DD
-    preferences: dict = {"voiceEnabled": True, "notificationsEnabled": True}
+    personalityType: Optional[str] = None  # Result from personality test
+    personalityTraits: dict = {}  # Detailed personality traits
+    preferences: dict = {
+        "voiceEnabled": True, 
+        "notificationsEnabled": True,
+        "notificationTime": "20:00"  # Default 8 PM
+    }
     createdAt: datetime = Field(default_factory=datetime.utcnow)
 
 # ==================== HELPER FUNCTIONS ====================
