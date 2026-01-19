@@ -13,6 +13,7 @@ interface GradientButtonProps {
     style?: ViewStyle;
     variant?: 'primary' | 'secondary' | 'outline';
     loading?: boolean;
+    disabled?: boolean;
 }
 
 export const GradientButton: React.FC<GradientButtonProps> = ({
@@ -21,7 +22,8 @@ export const GradientButton: React.FC<GradientButtonProps> = ({
     icon,
     style,
     variant = 'primary',
-    loading = false
+    loading = false,
+    disabled = false
 }) => {
     const theme = Colors.dark;
     const scale = new Animated.Value(1);
@@ -53,13 +55,15 @@ export const GradientButton: React.FC<GradientButtonProps> = ({
         return ['transparent', 'transparent'];
     };
 
+    const isDisabled = loading || disabled;
+
     return (
         <Pressable
             onPressIn={handlePressIn}
             onPressOut={handlePressOut}
             onPress={handlePress}
-            disabled={loading}
-            style={[styles.container, style]}
+            disabled={isDisabled}
+            style={[styles.container, style, isDisabled && { opacity: 0.5 }]}
         >
             <Animated.View style={{ transform: [{ scale }], width: '100%' }}>
                 <LinearGradient

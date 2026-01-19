@@ -1,4 +1,8 @@
+import React from 'react';
 import { View, StyleSheet, ViewStyle, TouchableOpacity } from 'react-native';
+import { GlassView } from './GlassView';
+import { Typo } from './Typo';
+import { Colors } from '../../constants/Colors';
 
 interface BentoCardProps {
     title?: string;

@@ -1,6 +1,6 @@
 import React from 'react';
 import { BlurView, BlurViewProps } from 'expo-blur';
-import { ViewStyle, StyleSheet, useColorScheme, View, Platform, StyleProp } from 'react-native';
+import { ViewStyle, StyleSheet, View, Platform, StyleProp } from 'react-native';
 import { Colors } from '../../constants/Colors';
 
 interface GlassViewProps extends BlurViewProps {
@@ -15,7 +15,6 @@ export const GlassView: React.FC<GlassViewProps> = ({
     intensity = 30,
     ...props
 }) => {
-    const isDark = true; // Force dark mode aesthetics for now as per plan
     const theme = Colors.dark;
 
     if (Platform.OS === 'web') {
@@ -36,12 +35,12 @@ export const GlassView: React.FC<GlassViewProps> = ({
     return (
         <BlurView
             intensity={intensity}
-            tint="dark"
+            tint="light"
             style={[
                 styles.container,
                 {
                     borderColor: theme.glassBorder,
-                    backgroundColor: 'rgba(2, 6, 23, 0.4)' // Slight overlay for better text contrast
+                    backgroundColor: 'rgba(255, 255, 255, 0.7)',
                 },
                 style
             ]}

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
     View,
     StyleSheet,
@@ -7,32 +7,96 @@ import {
     SafeAreaView,
     Dimensions,
     ImageBackground,
-    Alert
+    Platform,
+    RefreshControl,
+    Animated,
 } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import * as Speech from 'expo-speech';
-import { useRouter } from 'expo-router';
-import { Audio } from 'expo-av';
+import { useRouter, useFocusEffect } from 'expo-router';
+import * as Haptics from 'expo-haptics';
 
 import { Colors } from '../../constants/Colors';
 import { GlassView } from '../../components/ui/GlassView';
 import { Typo } from '../../components/ui/Typo';
 import { BentoCard } from '../../components/ui/BentoCard';
-import { GradientButton } from '../../components/ui/GradientButton';
 
 const { width } = Dimensions.get('window');
 const API_URL = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://localhost:8001';
 
+const MOODS = [
+    { id: 'great', emoji: '😊', label: 'Great', color: '#22C55E' },
+    { id: 'good', emoji: '🙂', label: 'Good', color: '#84CC16' },
+    { id: 'okay', emoji: '😐', label: 'Okay', color: '#F59E0B' },
+    { id: 'low', emoji: '😔', label: 'Low', color: '#9CA3AF' },
+    { id: 'anxious', emoji: '😰', label: 'Anxious', color: '#F87171' },
+];
+
+const getGreeting = () => {
+    const hour = new Date().getHours();
+    if (hour < 12) return { text: 'Good morning', icon: 'weather-sunny' };
+    if (hour < 17) return { text: 'Good afternoon', icon: 'weather-partly-cloudy' };
+    if (hour < 21) return { text: 'Good evening', icon: 'weather-sunset' };
+    return { text: 'Good night', icon: 'weather-night' };
+};
+
+const formatDate = () => {
+    return new Date().toLocaleDateString('en-US', {
+        weekday: 'long',
+        month: 'long',
+        day: 'numeric'
+    });
+};
+
 export default function HomeScreen() {
     const router = useRouter();
     const [profile, setProfile] = useState<any>(null);
-    const [quote, setQuote] = useState({ text: "Peace comes from within. Do not seek it without.", author: "Buddha" });
-    const [isSpeaking, setIsSpeaking] = useState(false);
+    const [dailyInsight, setDailyInsight] = useState<string | null>(null);
+    const [selectedMood, setSelectedMood] = useState<string | null>(null);
+    const [refreshing, setRefreshing] = useState(false);
+    const [insightLoading, setInsightLoading] = useState(true);
+    const pulseAnim = useState(new Animated.Value(1))[0];
 
+    const greeting = getGreeting();
+
+    // Pulse animation for voice button
     useEffect(() => {
-        loadProfile();
+        const pulse = Animated.loop(
+            Animated.sequence([
+                Animated.timing(pulseAnim, {
+                    toValue: 1.05,
+                    duration: 1500,
+                    useNativeDriver: true,
+                }),
+                Animated.timing(pulseAnim, {
+                    toValue: 1,
+                    duration: 1500,
+                    useNativeDriver: true,
+                }),
+            ])
+        );
+        pulse.start();
+        return () => pulse.stop();
     }, []);
+
+    useFocusEffect(
+        useCallback(() => {
+            loadData();
+        }, [])
+    );
+
+    const loadData = async () => {
+        await Promise.all([
+            loadProfile(),
+            loadDailyInsight(),
+        ]);
+    };
+
+    const onRefresh = async () => {
+        setRefreshing(true);
+        await loadData();
+        setRefreshing(false);
+    };
 
     const loadProfile = async () => {
         try {
@@ -41,34 +105,82 @@ export default function HomeScreen() {
         } catch (e) { console.error(e); }
     };
 
-    const startSession = () => {
-        // Navigate to Journal or Chat with specific intent? 
-        // User wants "Digital Psychologist". Chat is best for this.
-        // We can pass params to chat to start a "Psychologist" mode.
-        router.push('/(tabs)/chat');
+    const loadDailyInsight = async () => {
+        setInsightLoading(true);
+        try {
+            const response = await fetch(`${API_URL}/api/daily-insight`);
+            if (response.ok) {
+                const data = await response.json();
+                setDailyInsight(data.insight);
+            } else {
+                // Fallback insight
+                setDailyInsight("I'm here whenever you need to talk. How are you feeling today?");
+            }
+        } catch (e) {
+            console.error(e);
+            setDailyInsight("I'm here whenever you need to talk. How are you feeling today?");
+        } finally {
+            setInsightLoading(false);
+        }
     };
 
-    const handleVoiceCheckIn = async () => {
-        // Navigate to Journal for voice entry
-        router.push('/(tabs)/journal');
+    const handleMoodSelect = async (moodId: string) => {
+        if (Platform.OS !== 'web') {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        }
+        setSelectedMood(moodId);
+
+        // Save mood silently
+        try {
+            await fetch(`${API_URL}/api/moods`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    mood: moodId,
+                    intensity: MOODS.findIndex(m => m.id === moodId) <= 1 ? 7 : MOODS.findIndex(m => m.id === moodId) <= 2 ? 5 : 3,
+                }),
+            });
+        } catch (e) { console.error(e); }
+    };
+
+    const handleTalkPress = () => {
+        if (Platform.OS !== 'web') {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+        }
+        router.push('/(tabs)/talk');
     };
 
     return (
         <View style={styles.container}>
-            <LinearGradient colors={[Colors.dark.background, '#1e1b4b']} style={StyleSheet.absoluteFill} />
+            <View style={[StyleSheet.absoluteFill, { backgroundColor: Colors.dark.background }]} />
 
+            {/* Header */}
             <GlassView intensity={50} style={styles.header}>
                 <SafeAreaView>
                     <View style={styles.headerContent}>
-                        <View>
+                        <View style={styles.headerLeft}>
+                            <View style={styles.greetingRow}>
+                                <Typo variant="h2" weight="bold">
+                                    {greeting.text}, {profile?.name || 'Friend'}
+                                </Typo>
+                                <MaterialCommunityIcons
+                                    name={greeting.icon as any}
+                                    size={24}
+                                    color={Colors.dark.accent}
+                                    style={{ marginLeft: 8 }}
+                                />
+                            </View>
                             <Typo variant="caption" color={Colors.dark.textMuted}>
-                                {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
+                                {formatDate()}
                             </Typo>
-                            <Typo variant="h2" weight="bold">Hello, {profile?.name || 'Friend'}</Typo>
                         </View>
                         <TouchableOpacity onPress={() => router.push('/(tabs)/profile')}>
                             {profile?.profilePic ? (
-                                <ImageBackground source={{ uri: profile.profilePic }} style={styles.avatar} imageStyle={{ borderRadius: 20 }} />
+                                <ImageBackground
+                                    source={{ uri: profile.profilePic }}
+                                    style={styles.avatar}
+                                    imageStyle={{ borderRadius: 22 }}
+                                />
                             ) : (
                                 <View style={styles.avatarPlaceholder}>
                                     <MaterialCommunityIcons name="account" size={24} color={Colors.dark.textMuted} />
@@ -79,95 +191,257 @@ export default function HomeScreen() {
                 </SafeAreaView>
             </GlassView>
 
-            <ScrollView contentContainerStyle={styles.content}>
-
-                {/* Digital Psychologist Hero */}
-                <View style={styles.psychContainer}>
-                    <View style={styles.orbContainer}>
-                        <LinearGradient
-                            colors={[Colors.dark.primary, Colors.dark.secondary]}
-                            style={styles.orb}
-                        />
-                        <GlassView intensity={20} style={styles.orbGlass} />
+            <ScrollView
+                contentContainerStyle={styles.content}
+                refreshControl={
+                    <RefreshControl
+                        refreshing={refreshing}
+                        onRefresh={onRefresh}
+                        tintColor={Colors.dark.primary}
+                    />
+                }
+            >
+                {/* Daily Insight Card */}
+                <BentoCard style={styles.insightCard}>
+                    <View style={styles.insightHeader}>
+                        <MaterialCommunityIcons name="lightbulb-on" size={20} color={Colors.dark.secondary} />
+                        <Typo variant="label" weight="bold" color={Colors.dark.secondary} style={{ marginLeft: 8 }}>
+                            DAILY INSIGHT
+                        </Typo>
                     </View>
-                    <Typo variant="h3" weight="bold" align="center" style={{ marginTop: 24 }}>
-                        I'm here for you.
+                    <Typo variant="body" style={styles.insightText}>
+                        {insightLoading ? "Thinking about you..." : `"${dailyInsight}"`}
                     </Typo>
-                    <Typo variant="body" align="center" color={Colors.dark.textMuted} style={{ marginTop: 8, maxWidth: '80%' }}>
-                        Whether you need to vent, reflect, or find clarity, I'm listening.
-                    </Typo>
+                </BentoCard>
 
-                    <View style={styles.actionRow}>
-                        <TouchableOpacity onPress={startSession} style={styles.mainActionCmd}>
+                {/* Voice Button - Primary CTA */}
+                <View style={styles.voiceSection}>
+                    <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
+                        <TouchableOpacity
+                            onPress={handleTalkPress}
+                            activeOpacity={0.8}
+                        >
                             <LinearGradient
-                                colors={[Colors.dark.primary, '#4c1d95']}
-                                style={styles.actionGradient}
-                                start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
+                                colors={Colors.dark.accentGradient as any}
+                                style={styles.voiceButton}
                             >
-                                <MaterialCommunityIcons name="chat-processing" size={28} color="white" />
-                                <Typo variant="body" weight="bold" color="white">Chat Session</Typo>
+                                <MaterialCommunityIcons name="microphone" size={48} color="white" />
                             </LinearGradient>
                         </TouchableOpacity>
+                    </Animated.View>
+                    <Typo variant="h3" weight="bold" style={styles.voiceLabel}>
+                        Tap to talk
+                    </Typo>
+                    <Typo variant="caption" color={Colors.dark.textMuted}>
+                        I'm here to listen
+                    </Typo>
+                </View>
 
-                        <TouchableOpacity onPress={handleVoiceCheckIn} style={styles.secondaryAction}>
-                            <GlassView intensity={30} style={styles.glassBtn}>
-                                <MaterialCommunityIcons name="microphone" size={28} color={Colors.dark.secondary} />
-                                <Typo variant="body" weight="medium" color={Colors.dark.secondary}>Voice Note</Typo>
+                {/* Mood Quick-Select */}
+                <View style={styles.moodSection}>
+                    <Typo variant="body" color={Colors.dark.textMuted} style={styles.moodQuestion}>
+                        How are you feeling?
+                    </Typo>
+                    <View style={styles.moodRow}>
+                        {MOODS.map((mood) => (
+                            <TouchableOpacity
+                                key={mood.id}
+                                onPress={() => handleMoodSelect(mood.id)}
+                                style={[
+                                    styles.moodButton,
+                                    selectedMood === mood.id && {
+                                        backgroundColor: mood.color + '30',
+                                        borderColor: mood.color,
+                                    }
+                                ]}
+                            >
+                                <Typo variant="h2">{mood.emoji}</Typo>
+                            </TouchableOpacity>
+                        ))}
+                    </View>
+                </View>
+
+                {/* Quick Actions */}
+                <View style={styles.quickActionsSection}>
+                    <Typo variant="label" color={Colors.dark.textMuted} style={styles.sectionLabel}>
+                        Quick Actions
+                    </Typo>
+                    <View style={styles.quickActionsRow}>
+                        <TouchableOpacity
+                            style={styles.quickAction}
+                            onPress={() => router.push('/(tabs)/journal')}
+                        >
+                            <GlassView intensity={20} style={styles.quickActionInner}>
+                                <MaterialCommunityIcons name="notebook-outline" size={28} color={Colors.dark.secondary} />
+                                <Typo variant="body" weight="medium">Journal</Typo>
+                            </GlassView>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                            style={styles.quickAction}
+                            onPress={() => router.push('/(tabs)/insights')}
+                        >
+                            <GlassView intensity={20} style={styles.quickActionInner}>
+                                <MaterialCommunityIcons name="chart-line" size={28} color={Colors.dark.primary} />
+                                <Typo variant="body" weight="medium">Insights</Typo>
                             </GlassView>
                         </TouchableOpacity>
                     </View>
                 </View>
 
-                {/* Daily Insight */}
-                <BentoCard style={{ marginTop: 24 }}>
-                    <View style={{ flexDirection: 'row', gap: 12 }}>
-                        <MaterialCommunityIcons name="format-quote-open" size={32} color={Colors.dark.textMuted} style={{ opacity: 0.3 }} />
-                        <View style={{ flex: 1 }}>
-                            <Typo variant="body" style={{ fontStyle: 'italic', lineHeight: 24 }}>
-                                "{quote.text}"
-                            </Typo>
-                            <Typo variant="caption" weight="bold" style={{ marginTop: 12, opacity: 0.7 }}>
-                                — {quote.author}
-                            </Typo>
+                {/* Streak Display */}
+                {profile?.currentStreak > 0 && (
+                    <BentoCard style={styles.streakCard}>
+                        <View style={styles.streakContent}>
+                            <View style={styles.streakIcon}>
+                                <MaterialCommunityIcons name="fire" size={32} color={Colors.dark.accent} />
+                            </View>
+                            <View style={styles.streakInfo}>
+                                <Typo variant="h3" weight="bold">{profile.currentStreak} Day Streak!</Typo>
+                                <Typo variant="caption" color={Colors.dark.textMuted}>
+                                    Keep it going! You're doing great.
+                                </Typo>
+                            </View>
                         </View>
-                    </View>
-                </BentoCard>
-
-                {/* Stats / Quick Look */}
-                <View style={styles.statsRow}>
-                    <GlassView intensity={20} style={styles.statItem}>
-                        <MaterialCommunityIcons name="brain" size={24} color={Colors.dark.tint} />
-                        <Typo variant="caption" style={{ marginTop: 8 }}>Mental Wellness</Typo>
-                        <Typo variant="h3" weight="bold" color={Colors.dark.tint}>85%</Typo>
-                    </GlassView>
-                    <GlassView intensity={20} style={styles.statItem}>
-                        <MaterialCommunityIcons name="chart-line" size={24} color="#F59E0B" />
-                        <Typo variant="caption" style={{ marginTop: 8 }}>Mood Trend</Typo>
-                        <Typo variant="h3" weight="bold" color="#F59E0B">Stable</Typo>
-                    </GlassView>
-                </View>
-
+                    </BentoCard>
+                )}
             </ScrollView>
         </View>
     );
 }
 
 const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: Colors.dark.background },
-    header: { paddingTop: Platform.OS === 'android' ? 40 : 0 },
-    headerContent: { padding: 20, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-    avatar: { width: 40, height: 40, borderRadius: 20, overflow: 'hidden' },
-    avatarPlaceholder: { width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.1)', justifyContent: 'center', alignItems: 'center' },
-    content: { padding: 20, paddingBottom: 100 },
-    psychContainer: { alignItems: 'center', marginTop: 20 },
-    orbContainer: { width: 120, height: 120, justifyContent: 'center', alignItems: 'center', position: 'relative' },
-    orb: { width: 100, height: 100, borderRadius: 50, position: 'absolute' },
-    orbGlass: { width: 120, height: 120, borderRadius: 60, borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)' },
-    actionRow: { flexDirection: 'row', gap: 16, marginTop: 32, width: '100%' },
-    mainActionCmd: { flex: 1, height: 60, borderRadius: 30, shadowColor: Colors.dark.primary, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8 },
-    actionGradient: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 12, borderRadius: 30 },
-    secondaryAction: { flex: 1, height: 60 },
-    glassBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 12, borderRadius: 30, borderWidth: 1, borderColor: Colors.dark.glassBorder },
-    statsRow: { flexDirection: 'row', gap: 12, marginTop: 24 },
-    statItem: { flex: 1, padding: 16, borderRadius: 24, alignItems: 'center', gap: 4 },
+    container: {
+        flex: 1,
+        backgroundColor: Colors.dark.background
+    },
+    header: {
+        paddingTop: Platform.OS === 'android' ? 40 : 0,
+        borderBottomWidth: 1,
+        borderBottomColor: Colors.dark.glassBorder,
+    },
+    headerContent: {
+        padding: 20,
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center'
+    },
+    headerLeft: {
+        flex: 1,
+    },
+    greetingRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+    },
+    avatar: {
+        width: 44,
+        height: 44,
+        borderRadius: 22,
+        overflow: 'hidden'
+    },
+    avatarPlaceholder: {
+        width: 44,
+        height: 44,
+        borderRadius: 22,
+        backgroundColor: Colors.dark.surfaceHover,
+        justifyContent: 'center',
+        alignItems: 'center'
+    },
+    content: {
+        padding: 20,
+        paddingBottom: 120
+    },
+    insightCard: {
+        marginBottom: 24,
+    },
+    insightHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginBottom: 12,
+    },
+    insightText: {
+        fontStyle: 'italic',
+        lineHeight: 24,
+    },
+    voiceSection: {
+        alignItems: 'center',
+        marginVertical: 24,
+    },
+    voiceButton: {
+        width: 120,
+        height: 120,
+        borderRadius: 60,
+        justifyContent: 'center',
+        alignItems: 'center',
+        shadowColor: Colors.dark.primary,
+        shadowOffset: { width: 0, height: 8 },
+        shadowOpacity: 0.2,
+        shadowRadius: 20,
+        elevation: 10,
+    },
+    voiceLabel: {
+        marginTop: 16,
+    },
+    moodSection: {
+        marginVertical: 24,
+        alignItems: 'center',
+    },
+    moodQuestion: {
+        marginBottom: 16,
+    },
+    moodRow: {
+        flexDirection: 'row',
+        gap: 12,
+    },
+    moodButton: {
+        width: 56,
+        height: 56,
+        borderRadius: 28,
+        justifyContent: 'center',
+        alignItems: 'center',
+        backgroundColor: Colors.dark.surface,
+        borderWidth: 2,
+        borderColor: Colors.dark.glassBorder,
+    },
+    quickActionsSection: {
+        marginTop: 8,
+    },
+    sectionLabel: {
+        marginBottom: 12,
+    },
+    quickActionsRow: {
+        flexDirection: 'row',
+        gap: 12,
+    },
+    quickAction: {
+        flex: 1,
+    },
+    quickActionInner: {
+        padding: 20,
+        borderRadius: 20,
+        alignItems: 'center',
+        gap: 8,
+        borderWidth: 1,
+        borderColor: Colors.dark.glassBorder,
+        backgroundColor: Colors.dark.surface,
+    },
+    streakCard: {
+        marginTop: 24,
+    },
+    streakContent: {
+        flexDirection: 'row',
+        alignItems: 'center',
+    },
+    streakIcon: {
+        width: 56,
+        height: 56,
+        borderRadius: 28,
+        backgroundColor: Colors.dark.warningLight,
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    streakInfo: {
+        marginLeft: 16,
+        flex: 1,
+    },
 });

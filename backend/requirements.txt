@@ -122,3 +122,8 @@ watchfiles==1.1.1
 websockets==15.0.1
 yarl==1.22.0
 zipp==3.23.0
+
+# WhisperX for local speech-to-text (optional - requires GPU for best performance)
+# Install with: pip install whisperx
+# Or for CPU-only: pip install whisperx torch --index-url https://download.pytorch.org/whl/cpu
+whisperx>=3.1.1

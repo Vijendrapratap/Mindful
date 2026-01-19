@@ -11,6 +11,8 @@ from datetime import datetime, timedelta
 from bson import ObjectId
 import asyncio
 import json
+import base64
+import tempfile
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -20,7 +22,34 @@ mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 
-# Get Emergent LLM Key
+# OpenAI client for Whisper API (fallback)
+try:
+    from openai import AsyncOpenAI
+    openai_client = AsyncOpenAI(api_key=os.environ.get('OPENAI_API_KEY'))
+except Exception as e:
+    openai_client = None
+    logging.warning(f"OpenAI client not initialized: {e}")
+
+# WhisperX for local transcription (preferred if available)
+whisperx_model = None
+whisperx_available = False
+try:
+    import whisperx
+    import torch
+
+    # Check for GPU availability
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    compute_type = "float16" if torch.cuda.is_available() else "int8"
+
+    # Load model on startup (use smaller model for faster loading, or large-v2 for accuracy)
+    WHISPERX_MODEL_SIZE = os.environ.get('WHISPERX_MODEL', 'base')  # base, small, medium, large-v2
+    whisperx_model = whisperx.load_model(WHISPERX_MODEL_SIZE, device, compute_type=compute_type)
+    whisperx_available = True
+    logging.info(f"WhisperX loaded successfully on {device} with model {WHISPERX_MODEL_SIZE}")
+except ImportError:
+    logging.info("WhisperX not installed - will use OpenAI API for transcription")
+except Exception as e:
+    logging.warning(f"WhisperX initialization failed: {e} - will use OpenAI API")
 
 # Create the main app
 app = FastAPI()
@@ -139,6 +168,15 @@ class ExtractionLog(BaseModel):
     extractedNodes: List[str] = []  # Node IDs
     extractedEdges: List[str] = []  # Edge IDs
     timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+# New models for onboarding and transcription
+class OnboardingData(BaseModel):
+    name: str
+    intents: List[str] = []
+    reflectionTime: str = "whenever"
+
+class TranscriptionRequest(BaseModel):
+    audio: str  # base64 encoded audio
 
 # ==================== HELPER FUNCTIONS ====================
 
@@ -357,52 +395,92 @@ OPENROUTER_API_KEY = os.environ.get('OPENROUTER_API_KEY')
 # ...
 
 async def get_ai_response(conversation_id: str, user_message: str, conversation_type: str):
-    """Get AI response using LiteLLM"""
+    """Get AI response using LiteLLM with enhanced personality and memory"""
     try:
         if not acompletion:
             return "AI service unavailable (LiteLLM not installed)."
 
         # Get profile for knowledge graph context
         profile = await get_or_create_profile()
-        
+
         # Retrieve relevant context from knowledge graph
         context = await retrieve_knowledge_context(profile['id'], user_message)
-        
-        # Create system message based on type
+
+        # Get personality-specific tone guidelines
+        personality_type = profile.get('personalityType', 'The Balanced')
+        personality_tone = get_personality_tone(personality_type)
+
+        # Get recent conversation history for continuity
+        conversation = await db.conversations.find_one({'_id': ObjectId(conversation_id)})
+        recent_messages = conversation.get('messages', [])[-6:] if conversation else []
+
+        # Build memory context from recent messages
+        memory_context = ""
+        if recent_messages:
+            user_topics = [m['content'][:100] for m in recent_messages if m['role'] == 'user']
+            if user_topics:
+                memory_context = f"\n\nRecent topics they've shared: {'; '.join(user_topics[-3:])}"
+
+        # Create enhanced system message based on type
+        user_name = profile.get('name', 'friend')
+
         if conversation_type == "journal":
-            system_message = f"""You are MindfulMe, a warm and compassionate journaling companion. 
-            Your role is to help users reflect on their day through natural conversation.
-            
-            Guidelines:
-            - Be empathetic, warm, and non-judgmental
-            - Ask thoughtful follow-up questions but keep it conversational
-            - Validate emotions and experiences
-            - concise responses (2-3 sentences)
-            
-            Context: {context}"""
-        elif conversation_type == "personality_test":
-            system_message = f"""You are MindfulMe's Personality Assessor.
-            Your goal is to determine the user's personality type by asking a mix of deep probing questions and multiple-choice options.
+            system_message = f"""You are MindfulMe, {user_name}'s warm and compassionate journaling companion.
+            You're like a thoughtful friend who remembers everything they share.
+
+            About {user_name}:
+            - Personality: {personality_type}
+            - What you know about them: {context}
+            {memory_context}
+
+            Your communication style (adapted for {personality_type}):
+            {personality_tone}
 
             Guidelines:
-            - Ask ONE question at a time.
-            - For each question, provide 4 distinct options (A, B, C, D) representing different traits, but ALSO ask "Why?" or to elaborate.
-            - Encourage the user to answer with words, not just letters.
-            - Analyze their text to understand their underlying drivers (Openness, Conscientiousness, Extraversion, Agreeableness, Neuroticism).
-            - Keep the tone professional, insightful, and curious.
-            - Do not reveal the traits you are scoring yet.
-            
-            Context: {context}"""
-        else:  # chat
-            system_message = f"""You are MindfulMe, a supportive mental wellness companion.
-            Your role is to provide a safe space for users to talk.
-            
+            - NATURALLY reference things they've told you before ("Last time you mentioned...", "You said...")
+            - Ask ONE thoughtful follow-up question that shows you're listening
+            - Validate their emotions without being preachy
+            - Keep responses SHORT (2-3 sentences max)
+            - Sound like a caring friend, not a therapist or app"""
+
+        elif conversation_type == "personality_test":
+            system_message = f"""You are MindfulMe's Personality Assessor.
+            Your goal is to determine the user's personality type through conversation.
+
             Guidelines:
-            - Be empathetic and genuinely caring
-            - Listen actively
-            - concise responses (3-4 sentences)
-            
+            - Ask ONE question at a time
+            - Provide 4 distinct options (A, B, C, D) but encourage elaboration
+            - Analyze their words to understand: Openness, Conscientiousness, Extraversion, Agreeableness, Neuroticism
+            - Be warm and curious, not clinical
+            - Don't reveal what traits you're assessing
+
             Context: {context}"""
+
+        else:  # chat/talk
+            system_message = f"""You are MindfulMe, {user_name}'s personal mental wellness companion.
+            You're the friend who truly knows them and remembers everything important.
+
+            About {user_name}:
+            - Personality: {personality_type}
+            - What you know about them: {context}
+            {memory_context}
+
+            Your communication style (adapted for {personality_type}):
+            {personality_tone}
+
+            CRITICAL - Memory behavior:
+            - ALWAYS reference past conversations naturally ("You mentioned...", "Last time...", "I remember you said...")
+            - Connect current feelings to patterns you've noticed
+            - Ask follow-up questions about things they've shared before
+            - Show you remember names, events, feelings they've mentioned
+
+            Guidelines:
+            - Keep responses SHORT (2-4 sentences)
+            - Sound like a caring friend, not an AI
+            - Ask one thoughtful follow-up question
+            - Validate emotions without being preachy
+            - Match their energy - if they're casual, be casual
+            - If they seem stressed, be extra gentle"""
         
         # Select model based on conversation type
         model = "openrouter/anthropic/claude-4.5-sonnet"
@@ -529,6 +607,47 @@ def get_personality_description(personality_type: str) -> str:
         "The Balanced": "You have a well-rounded personality with strengths across multiple areas. You adapt well to different situations."
     }
     return descriptions.get(personality_type, "A unique individual with their own special strengths.")
+
+def get_personality_tone(personality_type: str) -> str:
+    """Get communication tone guidelines based on personality type"""
+    tones = {
+        "The Enthusiast": """- Be energetic and match their enthusiasm
+- Explore possibilities and new perspectives
+- Use vivid language and celebrate creativity
+- Ask "what if" questions to spark imagination
+- Be spontaneous and playful in responses""",
+
+        "The Supporter": """- Be extra warm, gentle, and validating
+- Focus on feelings and relationships
+- Emphasize connection and understanding
+- Use nurturing language ("I hear you", "That sounds hard")
+- Ask about how situations affect their relationships""",
+
+        "The Thinker": """- Be more analytical and explore the "why"
+- Offer frameworks for understanding feelings
+- Ask questions that invite deeper reflection
+- Use precise language and clear logic
+- Help them understand patterns and connections""",
+
+        "The Socializer": """- Be warm, friendly, and conversational
+- Share in their excitement about people and events
+- Ask about social dynamics and relationships
+- Use expressive language and show genuine interest
+- Connect their feelings to their social world""",
+
+        "The Achiever": """- Be direct and action-oriented
+- Help them find solutions and next steps
+- Acknowledge their accomplishments
+- Frame emotions in terms of growth and progress
+- Ask about goals and what they want to achieve""",
+
+        "The Balanced": """- Adapt your tone to match their energy
+- Balance emotional support with practical insight
+- Be flexible in your approach
+- Mirror their communication style
+- Provide a mix of validation and gentle guidance"""
+    }
+    return tones.get(personality_type, tones["The Balanced"])
 
 # Conversation endpoints
 @api_router.post("/conversations")
@@ -729,31 +848,369 @@ async def get_knowledge_graph():
 async def get_knowledge_stats():
     """Get knowledge graph statistics"""
     profile = await get_or_create_profile()
-    
+
     # Count nodes by type
     node_pipeline = [
         {"$match": {"profileId": profile['id']}},
         {"$group": {"_id": "$entityType", "count": {"$sum": 1}}}
     ]
     node_stats = await db.knowledge_nodes.aggregate(node_pipeline).to_list(100)
-    
+
     # Count edges by type
     edge_pipeline = [
         {"$match": {"profileId": profile['id']}},
         {"$group": {"_id": "$relationshipType", "count": {"$sum": 1}}}
     ]
     edge_stats = await db.knowledge_edges.aggregate(edge_pipeline).to_list(100)
-    
+
     # Total counts
     total_nodes = await db.knowledge_nodes.count_documents({'profileId': profile['id']})
     total_edges = await db.knowledge_edges.count_documents({'profileId': profile['id']})
-    
+
     return {
         "totalNodes": total_nodes,
         "totalEdges": total_edges,
         "nodesByType": {stat['_id']: stat['count'] for stat in node_stats},
         "edgesByType": {stat['_id']: stat['count'] for stat in edge_stats}
     }
+
+# ==================== NEW ENDPOINTS ====================
+
+# Onboarding endpoint
+@api_router.post("/onboarding")
+async def save_onboarding(data: OnboardingData):
+    """Save onboarding data and create/update profile"""
+    profile = await get_or_create_profile()
+
+    # Update profile with onboarding data
+    await db.profiles.update_one(
+        {'_id': ObjectId(profile['id'])},
+        {'$set': {
+            'name': data.name,
+            'intents': data.intents,
+            'reflectionTime': data.reflectionTime,
+            'onboardingComplete': True
+        }}
+    )
+
+    return await get_or_create_profile()
+
+# Transcription endpoint using WhisperX (preferred) or OpenAI API (fallback)
+@api_router.post("/transcribe")
+async def transcribe_audio(data: TranscriptionRequest):
+    """Transcribe audio using WhisperX (local) or OpenAI Whisper API (cloud fallback)"""
+
+    # Check if any transcription service is available
+    if not whisperx_available and not openai_client:
+        raise HTTPException(status_code=503, detail="No transcription service available")
+
+    try:
+        # Decode base64 audio
+        audio_bytes = base64.b64decode(data.audio)
+
+        # Write to temp file
+        with tempfile.NamedTemporaryFile(suffix=".m4a", delete=False) as temp_file:
+            temp_file.write(audio_bytes)
+            temp_path = temp_file.name
+
+        try:
+            transcript_text = ""
+
+            # Try WhisperX first (local, free, more accurate timestamps)
+            if whisperx_available and whisperx_model:
+                try:
+                    logger.info("Using WhisperX for transcription")
+                    # Load and transcribe audio
+                    audio = whisperx.load_audio(temp_path)
+                    result = whisperx_model.transcribe(audio, batch_size=16)
+
+                    # Extract text from segments
+                    if result and "segments" in result:
+                        transcript_text = " ".join([seg["text"] for seg in result["segments"]])
+                    elif result and "text" in result:
+                        transcript_text = result["text"]
+
+                    logger.info(f"WhisperX transcription successful: {len(transcript_text)} chars")
+
+                except Exception as wx_error:
+                    logger.warning(f"WhisperX failed, falling back to OpenAI: {wx_error}")
+                    transcript_text = ""  # Reset to try OpenAI
+
+            # Fallback to OpenAI Whisper API
+            if not transcript_text and openai_client:
+                logger.info("Using OpenAI Whisper API for transcription")
+                with open(temp_path, "rb") as audio_file:
+                    transcript = await openai_client.audio.transcriptions.create(
+                        model="whisper-1",
+                        file=audio_file,
+                        response_format="text"
+                    )
+                transcript_text = transcript.strip() if isinstance(transcript, str) else str(transcript)
+
+            if not transcript_text:
+                raise HTTPException(status_code=500, detail="Transcription produced no text")
+
+            return {"text": transcript_text.strip(), "engine": "whisperx" if whisperx_available else "openai"}
+
+        finally:
+            # Clean up temp file
+            import os as os_module
+            os_module.unlink(temp_path)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Transcription error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
+
+# Daily insight generation
+@api_router.get("/daily-insight")
+async def get_daily_insight():
+    """Generate personalized daily insight from knowledge graph"""
+    try:
+        profile = await get_or_create_profile()
+
+        # Get recent knowledge context
+        recent_nodes = await db.knowledge_nodes.find(
+            {'profileId': profile['id']}
+        ).sort('lastMentioned', -1).limit(15).to_list(15)
+
+        # Get recent moods
+        recent_moods = await db.moods.find().sort('timestamp', -1).limit(7).to_list(7)
+
+        # Get recent conversations for context
+        recent_convos = await db.conversations.find().sort('updatedAt', -1).limit(3).to_list(3)
+
+        # Build context for insight generation
+        context_parts = []
+
+        if recent_nodes:
+            people = [n['entityName'] for n in recent_nodes if n['entityType'] == 'Person'][:3]
+            emotions = [n['entityName'] for n in recent_nodes if n['entityType'] == 'Emotion'][:3]
+            activities = [n['entityName'] for n in recent_nodes if n['entityType'] == 'Activity'][:3]
+
+            if people:
+                context_parts.append(f"Important people: {', '.join(people)}")
+            if emotions:
+                context_parts.append(f"Recent emotions: {', '.join(emotions)}")
+            if activities:
+                context_parts.append(f"Recent activities: {', '.join(activities)}")
+
+        if recent_moods:
+            mood_summary = ", ".join([m['mood'] for m in recent_moods[:3]])
+            context_parts.append(f"Recent mood pattern: {mood_summary}")
+
+        # Generate insight using AI
+        if acompletion and context_parts:
+            try:
+                context = " | ".join(context_parts)
+                response = await acompletion(
+                    model="openrouter/anthropic/claude-4.5-sonnet",
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": """You are MindfulMe, generating a brief, personalized daily insight.
+                            Create ONE short observation (max 25 words) that:
+                            - References something specific the user has shared
+                            - Shows you truly understand and remember them
+                            - Is warm, supportive, and actionable
+                            - Feels like a thoughtful friend noticing a pattern
+
+                            Examples:
+                            - "I noticed you feel calmer on days you journal in the morning. It's 9am - perfect time?"
+                            - "You've mentioned Sarah three times this week. Want to explore that?"
+                            - "Your mood seems to lift on days you exercise. Today could be a good day for that."
+
+                            Do NOT use generic advice. Be specific to this person."""
+                        },
+                        {
+                            "role": "user",
+                            "content": f"User context: {context}\n\nGenerate a personalized insight:"
+                        }
+                    ],
+                    api_key=OPENROUTER_API_KEY,
+                    max_tokens=100
+                )
+                insight = response.choices[0].message.content.strip()
+                return {"insight": insight}
+            except Exception as e:
+                logger.error(f"AI insight generation failed: {e}")
+
+        # Fallback insights based on available data
+        hour = datetime.utcnow().hour
+        if profile.get('currentStreak', 0) > 3:
+            return {"insight": f"You're on a {profile['currentStreak']}-day streak! Consistency is building real self-awareness."}
+        elif hour < 12:
+            return {"insight": "Morning reflection sets the tone for your day. What's one thing you're grateful for?"}
+        elif hour < 17:
+            return {"insight": "Taking a moment to check in with yourself shows real self-care. I'm listening."}
+        else:
+            return {"insight": "Evening is a great time to reflect. How did today's experiences shape you?"}
+
+    except Exception as e:
+        logger.error(f"Daily insight error: {str(e)}")
+        return {"insight": "I'm here whenever you need to talk. What's on your mind today?"}
+
+# AI-generated insights endpoint
+@api_router.get("/insights")
+async def get_ai_insights():
+    """Get AI-generated pattern insights from user data"""
+    try:
+        profile = await get_or_create_profile()
+        insights = []
+
+        # Get mood statistics
+        mood_stats = await db.moods.find().sort('timestamp', -1).limit(30).to_list(30)
+
+        # Get knowledge nodes for pattern analysis
+        knowledge_nodes = await db.knowledge_nodes.find(
+            {'profileId': profile['id']}
+        ).sort('mentionCount', -1).limit(20).to_list(20)
+
+        # Pattern 1: Streak celebration
+        if profile.get('currentStreak', 0) >= 7:
+            insights.append({
+                "insight": f"Your {profile['currentStreak']}-day streak is your longest yet! You're building a powerful habit.",
+                "type": "celebration"
+            })
+        elif profile.get('currentStreak', 0) >= 3:
+            insights.append({
+                "insight": f"3 days in a row - you're building momentum! Keep it going.",
+                "type": "celebration"
+            })
+
+        # Pattern 2: Frequently mentioned people/topics
+        frequent_people = [n for n in knowledge_nodes if n['entityType'] == 'Person' and n['mentionCount'] >= 2]
+        if frequent_people:
+            top_person = frequent_people[0]
+            insights.append({
+                "insight": f"You mention {top_person['entityName']} often. They seem important to you - want to explore that relationship?",
+                "type": "pattern"
+            })
+
+        # Pattern 3: Emotion patterns
+        emotion_nodes = [n for n in knowledge_nodes if n['entityType'] == 'Emotion']
+        if emotion_nodes:
+            common_emotion = emotion_nodes[0]['entityName']
+            insights.append({
+                "insight": f"'{common_emotion.capitalize()}' comes up frequently in our conversations. Let's understand what triggers it.",
+                "type": "correlation"
+            })
+
+        # Pattern 4: Mood trend analysis
+        if mood_stats and len(mood_stats) >= 5:
+            positive_moods = sum(1 for m in mood_stats if m.get('mood') in ['great', 'good', 'happy', 'calm'])
+            if positive_moods > len(mood_stats) / 2:
+                insights.append({
+                    "insight": "Your mood has been trending positive lately. What's working well for you?",
+                    "type": "pattern"
+                })
+            else:
+                insights.append({
+                    "insight": "I've noticed some harder days recently. Remember - talking about it helps. I'm here.",
+                    "type": "correlation"
+                })
+
+        # Ensure at least one insight
+        if not insights:
+            insights.append({
+                "insight": "Keep sharing - the more we talk, the better I understand you and can offer meaningful insights.",
+                "type": "pattern"
+            })
+
+        return {"insights": insights[:4]}  # Return max 4 insights
+
+    except Exception as e:
+        logger.error(f"Insights generation error: {str(e)}")
+        return {"insights": [{"insight": "Continue your journey - insights will emerge as we learn more about you.", "type": "pattern"}]}
+
+# Contextual journal prompt
+@api_router.get("/journal-prompt")
+async def get_journal_prompt():
+    """Generate contextual journal prompt based on user history"""
+    try:
+        profile = await get_or_create_profile()
+
+        # Get recent context
+        recent_nodes = await db.knowledge_nodes.find(
+            {'profileId': profile['id']}
+        ).sort('lastMentioned', -1).limit(10).to_list(10)
+
+        recent_moods = await db.moods.find().sort('timestamp', -1).limit(3).to_list(3)
+
+        # Build prompt context
+        context_parts = []
+
+        if recent_nodes:
+            events = [n['entityName'] for n in recent_nodes if n['entityType'] in ['Event', 'Activity']][:2]
+            people = [n['entityName'] for n in recent_nodes if n['entityType'] == 'Person'][:2]
+            if events:
+                context_parts.append(f"Recent events: {', '.join(events)}")
+            if people:
+                context_parts.append(f"Important people: {', '.join(people)}")
+
+        if recent_moods:
+            mood = recent_moods[0].get('mood', 'okay')
+            context_parts.append(f"Recent mood: {mood}")
+
+        # Generate prompt using AI
+        if acompletion and context_parts:
+            try:
+                context = " | ".join(context_parts)
+                response = await acompletion(
+                    model="openrouter/anthropic/claude-4.5-sonnet",
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": """Generate ONE short journal prompt (max 15 words) that:
+                            - References something specific from the context
+                            - Is open-ended and invites reflection
+                            - Feels warm and personally relevant
+
+                            Examples:
+                            - "How did your meeting with Sarah go?"
+                            - "What's one thing that made you smile today?"
+                            - "You've had a tough week. What's one small win?"
+
+                            Just output the prompt, no explanation."""
+                        },
+                        {"role": "user", "content": f"Context: {context}"}
+                    ],
+                    api_key=OPENROUTER_API_KEY,
+                    max_tokens=50
+                )
+                prompt = response.choices[0].message.content.strip()
+                return {"prompt": prompt}
+            except Exception as e:
+                logger.error(f"Journal prompt AI error: {e}")
+
+        # Fallback prompts based on time of day
+        hour = datetime.utcnow().hour
+        if hour < 12:
+            prompts = [
+                "What are you looking forward to today?",
+                "How are you feeling this morning?",
+                "What would make today a good day?"
+            ]
+        elif hour < 17:
+            prompts = [
+                "What's been on your mind today?",
+                "Describe a moment from today that stands out.",
+                "What's something you're grateful for right now?"
+            ]
+        else:
+            prompts = [
+                "How would you describe your day in three words?",
+                "What did you learn about yourself today?",
+                "What's something you want to remember from today?"
+            ]
+
+        import random
+        return {"prompt": random.choice(prompts)}
+
+    except Exception as e:
+        logger.error(f"Journal prompt error: {str(e)}")
+        return {"prompt": "What's on your mind today?"}
 
 # Include router
 app.include_router(api_router)

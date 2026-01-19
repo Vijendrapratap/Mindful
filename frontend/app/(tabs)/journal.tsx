@@ -17,8 +17,10 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { Calendar } from 'react-native-calendars';
 import * as Speech from 'expo-speech';
 import * as ImagePicker from 'expo-image-picker';
+import * as FileSystem from 'expo-file-system';
 import { Audio } from 'expo-av';
 import { LinearGradient } from 'expo-linear-gradient';
+import * as Haptics from 'expo-haptics';
 
 import { Colors } from '../../constants/Colors';
 import { GlassView } from '../../components/ui/GlassView';
@@ -113,24 +115,41 @@ export default function JournalScreen() {
     setSelectedMood(null);
     setSelectedEmotions([]);
     setImages([]);
+    setLoading(true);
 
-    // Initial AI Greeting
-    const greeting = "Hi! I'm listening. How was your day? You can speak or type.";
-    setMessages([{ role: 'assistant', content: greeting, timestamp: new Date().toISOString() }]);
-
-    // Create Conversation
     try {
+      // Get contextual prompt from backend
+      const promptResponse = await fetch(`${API_URL}/api/journal-prompt`);
+      let greeting = "Hi! I'm listening. How was your day?";
+
+      if (promptResponse.ok) {
+        const promptData = await promptResponse.json();
+        greeting = promptData.prompt || greeting;
+      }
+
+      // Add greeting message
+      setMessages([{ role: 'assistant', content: greeting, timestamp: new Date().toISOString() }]);
+
+      // Create Conversation
       const response = await fetch(`${API_URL}/api/conversations`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ type: 'journal' }),
       });
+
       if (response.ok) {
         const data = await response.json();
         setConversationId(data.id);
         Speech.speak(greeting, { language: 'en', rate: 0.9 });
       }
-    } catch (e) { console.error(e); }
+    } catch (e) {
+      console.error(e);
+      // Fallback greeting
+      const fallbackGreeting = "Hi! I'm listening. What's on your mind today?";
+      setMessages([{ role: 'assistant', content: fallbackGreeting, timestamp: new Date().toISOString() }]);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const endSession = async () => {
@@ -205,24 +224,70 @@ export default function JournalScreen() {
 
   const startRecordingAudio = async () => {
     try {
+      if (Platform.OS !== 'web') {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      }
       await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
-      const { recording } = await Audio.Recording.createAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
-      setRecording(recording);
+      const { recording: newRecording } = await Audio.Recording.createAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
+      setRecording(newRecording);
       setIsRecording(true);
       Speech.stop(); // Stop AI speaking
-    } catch (e) { }
+    } catch (e) {
+      console.error('Recording error:', e);
+    }
   };
 
   const stopRecordingAudio = async () => {
     if (!recording) return;
-    setIsRecording(false);
-    await recording.stopAndUnloadAsync();
-    setRecording(null);
-    setVoiceRecording(recording.getURI()); // In real app, convert to base64
 
-    // Simulate sending voice
-    setInputText("I just recorded a voice note about my day.");
-    // In a real implementation, you'd transcribe this on the server
+    try {
+      if (Platform.OS !== 'web') {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      }
+      setIsRecording(false);
+      await recording.stopAndUnloadAsync();
+      const uri = recording.getURI();
+      setRecording(null);
+
+      if (uri) {
+        setLoading(true);
+        // Transcribe the audio
+        try {
+          const base64Audio = await FileSystem.readAsStringAsync(uri, {
+            encoding: FileSystem.EncodingType.Base64,
+          });
+
+          const transcribeResponse = await fetch(`${API_URL}/api/transcribe`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ audio: base64Audio }),
+          });
+
+          if (transcribeResponse.ok) {
+            const { text } = await transcribeResponse.json();
+            if (text && text.trim()) {
+              setInputText(text.trim());
+              setVoiceRecording(uri);
+            } else {
+              Alert.alert('No Speech', 'Could not detect any speech. Please try again.');
+            }
+          } else {
+            // Fallback: show that voice was recorded
+            setInputText("(Voice note recorded)");
+            setVoiceRecording(uri);
+          }
+        } catch (e) {
+          console.error('Transcription error:', e);
+          setInputText("(Voice note recorded)");
+          setVoiceRecording(uri);
+        } finally {
+          setLoading(false);
+        }
+      }
+    } catch (e) {
+      console.error('Stop recording error:', e);
+      setIsRecording(false);
+    }
   };
 
   const pickImage = async () => {
@@ -311,6 +376,41 @@ export default function JournalScreen() {
           </BentoCard>
         ))}
       </ScrollView>
+
+      {/* Calendar Modal */}
+      <Modal visible={showCalendar} animationType="slide" transparent>
+        <View style={styles.calendarModalContainer}>
+          <GlassView intensity={80} style={styles.calendarModal}>
+            <View style={styles.calendarHeader}>
+              <Typo variant="h3" weight="bold">Journal Calendar</Typo>
+              <TouchableOpacity onPress={() => setShowCalendar(false)}>
+                <MaterialCommunityIcons name="close" size={24} color={Colors.dark.text} />
+              </TouchableOpacity>
+            </View>
+            <Calendar
+              markedDates={markedDates}
+              theme={{
+                backgroundColor: 'transparent',
+                calendarBackground: 'transparent',
+                textSectionTitleColor: Colors.dark.textMuted,
+                selectedDayBackgroundColor: Colors.dark.primary,
+                selectedDayTextColor: '#ffffff',
+                todayTextColor: Colors.dark.primary,
+                dayTextColor: Colors.dark.text,
+                textDisabledColor: Colors.dark.tabIconDefault,
+                dotColor: Colors.dark.secondary,
+                selectedDotColor: '#ffffff',
+                arrowColor: Colors.dark.primary,
+                monthTextColor: Colors.dark.text,
+              }}
+              onDayPress={(day: any) => {
+                // Could navigate to specific day's entry
+                setShowCalendar(false);
+              }}
+            />
+          </GlassView>
+        </View>
+      </Modal>
 
       {/* Journaling Session Modal */}
       <Modal visible={isSessionActive} animationType="slide" presentationStyle="pageSheet">
@@ -428,4 +528,9 @@ const styles = StyleSheet.create({
   toolBtn: { padding: 10 },
   input: { flex: 1, backgroundColor: Colors.dark.surface, borderRadius: 20, padding: 12, paddingTop: 12, color: 'white', maxHeight: 100 },
   actionBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: Colors.dark.primary, justifyContent: 'center', alignItems: 'center' },
+
+  // Calendar Modal Styles
+  calendarModalContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.5)' },
+  calendarModal: { width: width - 40, borderRadius: 24, padding: 20 },
+  calendarHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
 });

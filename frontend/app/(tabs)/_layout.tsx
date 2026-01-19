@@ -3,7 +3,6 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { View, StyleSheet, Platform } from 'react-native';
 import { Colors } from '../../constants/Colors';
 import { GlassView } from '../../components/ui/GlassView';
-import { Typo } from '../../components/ui/Typo';
 
 export default function TabsLayout() {
   return (
@@ -19,9 +18,9 @@ export default function TabsLayout() {
           left: 16,
           right: 16,
           height: 72,
-          borderRadius: 30, // Pill shape
+          borderRadius: 30,
           borderTopWidth: 0,
-          backgroundColor: 'transparent', // Handled by GlassView
+          backgroundColor: 'transparent',
           elevation: 0,
           shadowColor: '#000',
           shadowOffset: { width: 0, height: 10 },
@@ -44,7 +43,7 @@ export default function TabsLayout() {
             <View style={{ alignItems: 'center', top: Platform.OS === 'ios' ? 10 : 0 }}>
               <MaterialCommunityIcons
                 name={focused ? "home" : "home-outline"}
-                size={28}
+                size={26}
                 color={color}
               />
               {focused && <View style={styles.activeDot} />}
@@ -53,14 +52,14 @@ export default function TabsLayout() {
         }}
       />
       <Tabs.Screen
-        name="chat"
+        name="talk"
         options={{
-          title: 'Chat',
+          title: 'Talk',
           tabBarIcon: ({ color, focused }) => (
             <View style={{ alignItems: 'center', top: Platform.OS === 'ios' ? 10 : 0 }}>
               <MaterialCommunityIcons
-                name={focused ? "chat-processing" : "chat-processing-outline"}
-                size={28}
+                name={focused ? "microphone" : "microphone-outline"}
+                size={26}
                 color={color}
               />
               {focused && <View style={styles.activeDot} />}
@@ -77,10 +76,26 @@ export default function TabsLayout() {
               <View style={[styles.journalButton, focused && styles.journalButtonActive]}>
                 <MaterialCommunityIcons
                   name="notebook"
-                  size={28}
+                  size={26}
                   color={focused ? 'white' : Colors.dark.surface}
                 />
               </View>
+            </View>
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="insights"
+        options={{
+          title: 'Insights',
+          tabBarIcon: ({ color, focused }) => (
+            <View style={{ alignItems: 'center', top: Platform.OS === 'ios' ? 10 : 0 }}>
+              <MaterialCommunityIcons
+                name={focused ? "chart-line" : "chart-line-variant"}
+                size={26}
+                color={color}
+              />
+              {focused && <View style={styles.activeDot} />}
             </View>
           ),
         }}
@@ -93,12 +108,19 @@ export default function TabsLayout() {
             <View style={{ alignItems: 'center', top: Platform.OS === 'ios' ? 10 : 0 }}>
               <MaterialCommunityIcons
                 name={focused ? "account-circle" : "account-circle-outline"}
-                size={28}
+                size={26}
                 color={color}
               />
               {focused && <View style={styles.activeDot} />}
             </View>
           ),
+        }}
+      />
+      {/* Hide the old chat screen from tabs */}
+      <Tabs.Screen
+        name="chat"
+        options={{
+          href: null, // This hides it from the tab bar
         }}
       />
     </Tabs>
@@ -110,23 +132,23 @@ const styles = StyleSheet.create({
     width: 4,
     height: 4,
     borderRadius: 2,
-    backgroundColor: Colors.dark.tint,
+    backgroundColor: Colors.dark.primary,
     marginTop: 4,
   },
   journalButton: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: Colors.dark.tint,
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: Colors.dark.primary,
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 30, // Float above
-    shadowColor: Colors.dark.tint,
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.4,
-    shadowRadius: 12,
+    marginBottom: 28,
+    shadowColor: Colors.dark.primary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
     borderWidth: 4,
-    borderColor: Colors.dark.background, // Create a cutout effect
+    borderColor: Colors.dark.surface,
   },
   journalButtonActive: {
     transform: [{ scale: 1.1 }]

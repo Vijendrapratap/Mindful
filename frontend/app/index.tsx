@@ -1,8 +1,9 @@
-import React, { useEffect } from 'react';
-import { View, StyleSheet, SafeAreaView, Animated, Dimensions } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { View, StyleSheet, SafeAreaView, Animated, Dimensions, ActivityIndicator } from 'react-native';
 import { useRouter } from 'expo-router';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Colors } from '../constants/Colors';
 import { Typo } from '../components/ui/Typo';
 import { GradientButton } from '../components/ui/GradientButton';
@@ -12,10 +13,31 @@ const { width } = Dimensions.get('window');
 
 export default function WelcomeScreen() {
   const router = useRouter();
+  const [isLoading, setIsLoading] = useState(true);
   const fadeAnim = new Animated.Value(0);
   const scaleAnim = new Animated.Value(0.9);
 
   useEffect(() => {
+    checkOnboardingStatus();
+  }, []);
+
+  const checkOnboardingStatus = async () => {
+    try {
+      const onboardingComplete = await AsyncStorage.getItem('onboardingComplete');
+      if (onboardingComplete === 'true') {
+        // User has completed onboarding, go directly to home
+        router.replace('/(tabs)/home');
+        return;
+      }
+    } catch (error) {
+      console.error('Error checking onboarding status:', error);
+    }
+    // Show welcome screen
+    setIsLoading(false);
+    startAnimations();
+  };
+
+  const startAnimations = () => {
     Animated.parallel([
       Animated.timing(fadeAnim, {
         toValue: 1,
@@ -28,22 +50,21 @@ export default function WelcomeScreen() {
         useNativeDriver: true,
       }),
     ]).start();
-  }, []);
+  };
+
+  // Show loading state while checking onboarding status
+  if (isLoading) {
+    return (
+      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
+        <View style={[StyleSheet.absoluteFill, { backgroundColor: Colors.dark.background }]} />
+        <ActivityIndicator size="large" color={Colors.dark.primary} />
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
-      <LinearGradient
-        colors={[Colors.dark.background, '#1e1b4b']} // Deep slate to dark indigo
-        style={StyleSheet.absoluteFill}
-      />
-
-      {/* Ambient background glow */}
-      <View style={styles.glowContainer}>
-        <View style={[styles.glowOrb, { backgroundColor: Colors.dark.primary }]} />
-        <View style={[styles.glowOrb, { backgroundColor: Colors.dark.secondary, top: '40%', left: -50 }]} />
-      </View>
-
-      <GlassView intensity={50} style={StyleSheet.absoluteFill} />
+      <View style={[StyleSheet.absoluteFill, { backgroundColor: Colors.dark.background }]} />
 
       <SafeAreaView style={styles.content}>
         <Animated.View style={[styles.hero, { opacity: fadeAnim, transform: [{ scale: scaleAnim }] }]}>
@@ -60,25 +81,25 @@ export default function WelcomeScreen() {
             MindfulMe
           </Typo>
           <Typo variant="h3" align="center" color={Colors.dark.textMuted} style={styles.subtitle}>
-            Your intelligent companion for mental wellness.
+            Your pocket companion who truly knows you.
           </Typo>
         </Animated.View>
 
         <Animated.View style={{ opacity: fadeAnim, width: '100%', gap: 20 }}>
           <GlassView intensity={20} style={styles.featuresCard}>
-            <FeatureRow icon="chat-processing" text="Intelligent Conversations" delay={0} />
-            <FeatureRow icon="book-open-variant" text="Mindful Journaling" delay={200} />
-            <FeatureRow icon="chart-timeline-variant" text="Mood Analytics" delay={400} />
+            <FeatureRow icon="microphone" text="Voice-First Conversations" delay={0} />
+            <FeatureRow icon="brain" text="AI That Remembers You" delay={200} />
+            <FeatureRow icon="lightbulb-on" text="Personalized Insights" delay={400} />
           </GlassView>
 
           <GradientButton
             title="Get Started"
-            onPress={() => router.push('/(tabs)/home')}
+            onPress={() => router.push('/onboarding')}
             icon="arrow-forward"
           />
 
           <Typo variant="caption" align="center" style={{ marginTop: 10, opacity: 0.6 }}>
-            Daily mental wellness, simplified.
+            Not an app you use, a friend you talk to.
           </Typo>
         </Animated.View>
       </SafeAreaView>
