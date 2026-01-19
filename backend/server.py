@@ -9,7 +9,6 @@ from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta
 from bson import ObjectId
-from emergentintegrations.llm.chat import LlmChat, UserMessage
 import asyncio
 import json
 
@@ -22,7 +21,6 @@ client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 
 # Get Emergent LLM Key
-EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY')
 
 # Create the main app
 app = FastAPI()
@@ -94,6 +92,8 @@ class UserProfile(BaseModel):
     id: Optional[str] = None
     name: Optional[str] = None
     age: Optional[int] = None
+    gender: Optional[str] = None  # New field
+    personality: Optional[dict] = None  # { type: str, traits: list, summary: str }
     profilePic: Optional[str] = None  # base64 encoded image
     currentStreak: int = 0
     longestStreak: int = 0
@@ -344,9 +344,24 @@ async def store_or_update_node(profile_id: str, entity_type: str, entity_name: s
         logger.error(f"Error storing knowledge node: {str(e)}")
         return None
 
+try:
+    from litellm import acompletion
+except ImportError:
+    acompletion = None
+
+# ... (imports) ...
+
+# Get API Key
+OPENROUTER_API_KEY = os.environ.get('OPENROUTER_API_KEY')
+
+# ...
+
 async def get_ai_response(conversation_id: str, user_message: str, conversation_type: str):
-    """Get AI response using Claude via emergentintegrations"""
+    """Get AI response using LiteLLM"""
     try:
+        if not acompletion:
+            return "AI service unavailable (LiteLLM not installed)."
+
         # Get profile for knowledge graph context
         profile = await get_or_create_profile()
         
@@ -360,69 +375,67 @@ async def get_ai_response(conversation_id: str, user_message: str, conversation_
             
             Guidelines:
             - Be empathetic, warm, and non-judgmental
-            - Ask thoughtful follow-up questions to help users explore their thoughts
-            - Don't just say "that's good" - dig deeper with curiosity
-            - Keep responses concise (2-3 sentences) to maintain conversational flow
+            - Ask thoughtful follow-up questions but keep it conversational
             - Validate emotions and experiences
-            - Help users process their day, not solve their problems
-            - Use conversational language, like a caring friend
+            - concise responses (2-3 sentences)
             
-            Context about the user (from previous conversations):
-            {context}
+            Context: {context}"""
+        elif conversation_type == "personality_test":
+            system_message = f"""You are MindfulMe's Personality Assessor.
+            Your goal is to determine the user's personality type by asking a mix of deep probing questions and multiple-choice options.
+
+            Guidelines:
+            - Ask ONE question at a time.
+            - For each question, provide 4 distinct options (A, B, C, D) representing different traits, but ALSO ask "Why?" or to elaborate.
+            - Encourage the user to answer with words, not just letters.
+            - Analyze their text to understand their underlying drivers (Openness, Conscientiousness, Extraversion, Agreeableness, Neuroticism).
+            - Keep the tone professional, insightful, and curious.
+            - Do not reveal the traits you are scoring yet.
             
-            Use this context naturally when relevant, but don't force it into every response.
-            
-            Example responses:
-            - "That sounds like it was challenging. What made it particularly difficult for you?"
-            - "I hear excitement in what you're sharing! What part of that experience felt most meaningful?"
-            - "It seems like that really affected you. How are you feeling about it now?\""""
+            Context: {context}"""
         else:  # chat
-            system_message = f"""You are MindfulMe, a supportive mental wellness companion and friend.
-            Your role is to provide a safe, non-judgmental space for users to talk about their thoughts and feelings.
+            system_message = f"""You are MindfulMe, a supportive mental wellness companion.
+            Your role is to provide a safe space for users to talk.
             
             Guidelines:
-            - Be empathetic, warm, and genuinely caring
-            - Listen actively and ask thoughtful follow-up questions
-            - Help users explore their emotions without being clinical or therapeutic
-            - Validate their experiences and feelings
-            - You're a friend, not a therapist - be conversational and human
-            - Keep responses concise but meaningful (3-4 sentences)
-            - Show genuine interest in understanding their perspective
-            - Recognize when to offer comfort vs. when to ask deeper questions
+            - Be empathetic and genuinely caring
+            - Listen actively
+            - concise responses (3-4 sentences)
             
-            Context about the user (from previous conversations):
-            {context}
-            
-            Use this context to show you remember them and care about their journey.
-            Reference past events naturally when appropriate.
-            
-            Remember: You're here to listen, understand, and support - not to fix or diagnose."""
+            Context: {context}"""
         
-        # Initialize AI chat
-        chat = LlmChat(
-            api_key=EMERGENT_LLM_KEY,
-            session_id=conversation_id,
-            system_message=system_message
-        ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+        # Select model based on conversation type
+        model = "openrouter/anthropic/claude-4.5-sonnet"
+        if conversation_type == "personality_test":
+             model = "openrouter/moonshotai/kimi-k2-thinking"
+
+        # Call LLM
+        response = await acompletion(
+            model=model, 
+            messages=[
+                {"role": "system", "content": system_message},
+                {"role": "user", "content": user_message}
+            ],
+            api_key=OPENROUTER_API_KEY
+        )
         
-        # Create user message
-        message = UserMessage(text=user_message)
+        ai_text = response.choices[0].message.content
         
-        # Get response
-        response = await chat.send_message(message)
-        
-        # Extract knowledge in background (don't wait for it)
+        # Extract knowledge in background
         asyncio.create_task(extract_knowledge_from_message(
             profile['id'], 
             conversation_id, 
             user_message, 
-            response
+            ai_text
         ))
         
-        return response
+        return ai_text
         
     except Exception as e:
         logger.error(f"Error getting AI response: {str(e)}")
+        # Graceful fallback if no key
+        if "api_key" in str(e).lower():
+            return "I'm having trouble connecting to my brain right now (API Key missing). But I'm listening!"
         raise HTTPException(status_code=500, detail=f"AI response error: {str(e)}")
 
 # ==================== API ENDPOINTS ====================

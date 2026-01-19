@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
-  Text,
   StyleSheet,
   TextInput,
   TouchableOpacity,
@@ -11,13 +10,20 @@ import {
   Platform,
   ActivityIndicator,
   Alert,
+  Dimensions
 } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import * as Speech from 'expo-speech';
+import * as Haptics from 'expo-haptics';
 import { Audio } from 'expo-av';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Colors } from '../../constants/Colors';
+import { GlassView } from '../../components/ui/GlassView';
+import { Typo } from '../../components/ui/Typo';
 
 const API_URL = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://localhost:8001';
+const { width } = Dimensions.get('window');
 
 interface Message {
   role: 'user' | 'assistant';
@@ -50,11 +56,8 @@ export default function ChatScreen() {
 
   const loadOrCreateConversation = async () => {
     try {
-      // Check if we have a saved conversation
       const savedId = await AsyncStorage.getItem('currentChatConversation');
-      
       if (savedId) {
-        // Load existing conversation
         const response = await fetch(`${API_URL}/api/conversations/${savedId}`);
         if (response.ok) {
           const data = await response.json();
@@ -64,7 +67,6 @@ export default function ChatScreen() {
         }
       }
 
-      // Create new conversation
       const response = await fetch(`${API_URL}/api/conversations`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -75,8 +77,6 @@ export default function ChatScreen() {
         const data = await response.json();
         setConversationId(data.id);
         await AsyncStorage.setItem('currentChatConversation', data.id);
-        
-        // Add welcome message
         setMessages([{
           role: 'assistant',
           content: "Hi there! I'm here to listen. How are you feeling today?",
@@ -86,18 +86,20 @@ export default function ChatScreen() {
       }
     } catch (error) {
       console.error('Error loading conversation:', error);
-      Alert.alert('Error', 'Failed to load conversation');
     }
   };
 
   const sendMessage = async () => {
     if (!inputText.trim() || !conversationId || loading) return;
 
+    if (Platform.OS !== 'web') {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    }
+
     const userMessage = inputText.trim();
     setInputText('');
     setLoading(true);
 
-    // Add user message to UI immediately
     const newUserMessage: Message = {
       role: 'user',
       content: userMessage,
@@ -120,10 +122,10 @@ export default function ChatScreen() {
       if (response.ok) {
         const data = await response.json();
         setMessages(data.messages || []);
-        
-        // Speak the last message (assistant's response)
+
         if (data.messages && data.messages.length > 0) {
           const lastMessage = data.messages[data.messages.length - 1];
+          // Only speak if user hasn't typed another message
           if (lastMessage.role === 'assistant') {
             Speech.speak(lastMessage.content, {
               language: 'en',
@@ -132,11 +134,8 @@ export default function ChatScreen() {
             });
           }
         }
-      } else {
-        Alert.alert('Error', 'Failed to send message');
       }
     } catch (error) {
-      console.error('Error sending message:', error);
       Alert.alert('Error', 'Failed to send message');
     } finally {
       setLoading(false);
@@ -145,46 +144,39 @@ export default function ChatScreen() {
 
   const startRecording = async () => {
     try {
+      Haptics.selectionAsync();
       await Audio.setAudioModeAsync({
         allowsRecordingIOS: true,
         playsInSilentModeIOS: true,
       });
-
       const { recording } = await Audio.Recording.createAsync(
         Audio.RecordingOptionsPresets.HIGH_QUALITY
       );
       setRecording(recording);
       setIsRecording(true);
     } catch (error) {
-      console.error('Failed to start recording:', error);
       Alert.alert('Error', 'Failed to start recording');
     }
   };
 
   const stopRecording = async () => {
     if (!recording) return;
-
     try {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setIsRecording(false);
       await recording.stopAndUnloadAsync();
-      const uri = recording.getURI();
       setRecording(null);
-      
-      // For MVP, show message that voice transcription needs implementation
-      Alert.alert(
-        'Voice Recording',
-        'Voice transcription is being processed. For now, please type your message.',
-        [{ text: 'OK' }]
-      );
+      Alert.alert('Voice Recording', 'Voice transcription is being processed. For now, please type your message.', [{ text: 'OK' }]);
     } catch (error) {
       console.error('Failed to stop recording:', error);
     }
   };
 
   const clearConversation = async () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     Alert.alert(
       'Clear Conversation',
-      'Are you sure you want to start a new conversation?',
+      'Start fresh?',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -202,72 +194,90 @@ export default function ChatScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
-        <View>
-          <Text style={styles.headerTitle}>Chat</Text>
-          <Text style={styles.headerSubtitle}>Talk about what's on your mind</Text>
-        </View>
-        <TouchableOpacity onPress={clearConversation}>
-          <MaterialCommunityIcons name="refresh" size={24} color="#7C3AED" />
-        </TouchableOpacity>
-      </View>
+    <View style={styles.container}>
+      {/* Background */}
+      <LinearGradient
+        colors={[Colors.dark.background, '#1e1b4b']}
+        style={StyleSheet.absoluteFill}
+      />
+
+      <GlassView intensity={30} style={styles.header}>
+        <SafeAreaView>
+          <View style={styles.headerContent}>
+            <View>
+              <Typo variant="h2" weight="bold">Chat</Typo>
+              <Typo variant="caption">Mindful Companion</Typo>
+            </View>
+            <TouchableOpacity onPress={clearConversation} style={styles.iconButton}>
+              <MaterialCommunityIcons name="refresh" size={24} color={Colors.dark.tint} />
+            </TouchableOpacity>
+          </View>
+        </SafeAreaView>
+      </GlassView>
 
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        keyboardVerticalOffset={100}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
       >
         <ScrollView
           ref={scrollViewRef}
           style={styles.messagesContainer}
           contentContainerStyle={styles.messagesContent}
-          onContentSizeChange={() =>
-            scrollViewRef.current?.scrollToEnd({ animated: true })
-          }
+          onContentSizeChange={() => scrollViewRef.current?.scrollToEnd({ animated: true })}
         >
-          {messages.map((message, index) => (
-            <View
-              key={index}
-              style={[
-                styles.messageBubble,
-                message.role === 'user'
-                  ? styles.userMessage
-                  : styles.assistantMessage,
-              ]}
-            >
-              <Text
-                style={[
-                  styles.messageText,
-                  message.role === 'user'
-                    ? styles.userMessageText
-                    : styles.assistantMessageText,
-                ]}
-              >
-                {message.content}
-              </Text>
-            </View>
-          ))}
+          {messages.map((message, index) => {
+            const isUser = message.role === 'user';
+            return (
+              <View key={index} style={[
+                styles.messageRow,
+                isUser ? styles.userRow : styles.assistantRow
+              ]}>
+                {!isUser && (
+                  <View style={styles.avatar}>
+                    <MaterialCommunityIcons name="leaf" size={16} color="white" />
+                  </View>
+                )}
+
+                {isUser ? (
+                  <LinearGradient
+                    colors={Colors.dark.accentGradient as any}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 1 }}
+                    style={[styles.bubble, styles.userBubble]}
+                  >
+                    <Typo color="white" style={{ lineHeight: 22 }}>{message.content}</Typo>
+                  </LinearGradient>
+                ) : (
+                  <GlassView intensity={20} style={[styles.bubble, styles.assistantBubble]}>
+                    <Typo color={Colors.dark.text} style={{ lineHeight: 22 }}>{message.content}</Typo>
+                  </GlassView>
+                )}
+              </View>
+            );
+          })}
           {loading && (
-            <View style={[styles.messageBubble, styles.assistantMessage]}>
-              <ActivityIndicator color="#7C3AED" />
+            <View style={[styles.messageRow, styles.assistantRow]}>
+              <View style={styles.avatar}>
+                <MaterialCommunityIcons name="leaf" size={16} color="white" />
+              </View>
+              <GlassView intensity={10} style={[styles.bubble, styles.assistantBubble, { width: 60, alignItems: 'center' }]}>
+                <ActivityIndicator color={Colors.dark.tint} size="small" />
+              </GlassView>
             </View>
           )}
         </ScrollView>
 
-        <View style={styles.inputContainer}>
+        <GlassView intensity={50} style={styles.inputBar}>
           <TouchableOpacity
-            style={[
-              styles.voiceButton,
-              isRecording && styles.voiceButtonActive,
-            ]}
+            style={[styles.voiceButton, isRecording && styles.voiceButtonActive]}
             onPressIn={startRecording}
             onPressOut={stopRecording}
           >
             <MaterialCommunityIcons
               name={isRecording ? 'microphone' : 'microphone-outline'}
               size={24}
-              color={isRecording ? '#EF4444' : '#7C3AED'}
+              color={isRecording ? 'white' : Colors.dark.textMuted}
             />
           </TouchableOpacity>
 
@@ -276,126 +286,129 @@ export default function ChatScreen() {
             value={inputText}
             onChangeText={setInputText}
             placeholder="Type your message..."
-            placeholderTextColor="#6B7280"
+            placeholderTextColor={Colors.dark.textMuted}
             multiline
-            maxLength={1000}
           />
 
           <TouchableOpacity
-            style={[
-              styles.sendButton,
-              (!inputText.trim() || loading) && styles.sendButtonDisabled,
-            ]}
+            style={[styles.sendButton, !inputText.trim() && { opacity: 0.5 }]}
             onPress={sendMessage}
             disabled={!inputText.trim() || loading}
           >
-            <MaterialCommunityIcons
-              name="send"
-              size={24}
-              color={inputText.trim() && !loading ? '#FFFFFF' : '#6B7280'}
+            <LinearGradient
+              colors={Colors.dark.accentGradient as any}
+              style={StyleSheet.absoluteFill}
             />
+            <MaterialCommunityIcons name="arrow-up" size={24} color="white" />
           </TouchableOpacity>
-        </View>
+        </GlassView>
       </KeyboardAvoidingView>
-    </SafeAreaView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0F0F0F',
+    backgroundColor: Colors.dark.background,
   },
   header: {
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.dark.glassBorder,
+    paddingTop: Platform.OS === 'android' ? 40 : 0,
+  },
+  headerContent: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 20,
     paddingVertical: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#374151',
   },
-  headerTitle: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
-  },
-  headerSubtitle: {
-    fontSize: 14,
-    color: '#9CA3AF',
-    marginTop: 2,
+  iconButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: Colors.dark.surface,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   messagesContainer: {
     flex: 1,
   },
   messagesContent: {
     padding: 16,
-    gap: 12,
+    paddingBottom: 100, // Space for input bar
   },
-  messageBubble: {
-    maxWidth: '80%',
-    padding: 12,
-    borderRadius: 16,
-    marginVertical: 4,
-  },
-  userMessage: {
-    alignSelf: 'flex-end',
-    backgroundColor: '#7C3AED',
-  },
-  assistantMessage: {
-    alignSelf: 'flex-start',
-    backgroundColor: '#1F1F1F',
-  },
-  messageText: {
-    fontSize: 16,
-    lineHeight: 22,
-  },
-  userMessageText: {
-    color: '#FFFFFF',
-  },
-  assistantMessageText: {
-    color: '#E5E7EB',
-  },
-  inputContainer: {
+  messageRow: {
     flexDirection: 'row',
+    marginBottom: 16,
+    maxWidth: '85%',
+  },
+  userRow: {
+    alignSelf: 'flex-end',
+    justifyContent: 'flex-end',
+  },
+  assistantRow: {
+    alignSelf: 'flex-start',
+  },
+  avatar: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: Colors.dark.secondary,
+    justifyContent: 'center',
     alignItems: 'center',
+    marginRight: 8,
+    marginTop: 4,
+  },
+  bubble: {
+    padding: 12,
     paddingHorizontal: 16,
-    paddingVertical: 12,
-    backgroundColor: '#1F1F1F',
-    borderTopWidth: 1,
-    borderTopColor: '#374151',
-    gap: 12,
+    borderRadius: 20,
+  },
+  userBubble: {
+    borderBottomRightRadius: 4,
+  },
+  assistantBubble: {
+    borderTopLeftRadius: 4,
+  },
+  inputBar: {
+    position: 'absolute',
+    bottom: 90, // Above tab bar
+    left: 16,
+    right: 16,
+    borderRadius: 30,
+    padding: 8,
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    borderWidth: 1,
+    borderColor: Colors.dark.glassBorder,
+    backgroundColor: 'rgba(15, 23, 42, 0.8)',
+  },
+  input: {
+    flex: 1,
+    color: 'white',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    fontSize: 16,
+    maxHeight: 100,
   },
   voiceButton: {
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: '#262626',
-    alignItems: 'center',
     justifyContent: 'center',
+    alignItems: 'center',
   },
   voiceButtonActive: {
-    backgroundColor: '#FEE2E2',
-  },
-  input: {
-    flex: 1,
-    backgroundColor: '#262626',
-    borderRadius: 22,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    color: '#FFFFFF',
-    fontSize: 16,
-    maxHeight: 100,
+    backgroundColor: Colors.dark.error,
   },
   sendButton: {
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: '#7C3AED',
-    alignItems: 'center',
     justifyContent: 'center',
-  },
-  sendButtonDisabled: {
-    backgroundColor: '#262626',
-  },
+    alignItems: 'center',
+    overflow: 'hidden',
+  }
 });

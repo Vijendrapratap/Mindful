@@ -1,7 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
-  Text,
   StyleSheet,
   TouchableOpacity,
   ScrollView,
@@ -10,16 +9,22 @@ import {
   Alert,
   ActivityIndicator,
   Image,
-  Modal,
   Dimensions,
+  Platform,
+  Modal
 } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { Calendar } from 'react-native-calendars';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Speech from 'expo-speech';
 import * as ImagePicker from 'expo-image-picker';
 import { Audio } from 'expo-av';
-import { BlurView } from 'expo-blur';
+import { LinearGradient } from 'expo-linear-gradient';
+
+import { Colors } from '../../constants/Colors';
+import { GlassView } from '../../components/ui/GlassView';
+import { Typo } from '../../components/ui/Typo';
+import { GradientButton } from '../../components/ui/GradientButton';
+import { BentoCard } from '../../components/ui/BentoCard';
 
 const API_URL = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://localhost:8001';
 const { width } = Dimensions.get('window');
@@ -46,27 +51,29 @@ interface Message {
 
 export default function JournalScreen() {
   const [profile, setProfile] = useState<any>(null);
-  const [todayJournal, setTodayJournal] = useState<any>(null);
+  const [journalHistory, setJournalHistory] = useState<any[]>([]);
+  const [showCalendar, setShowCalendar] = useState(false);
+  const [markedDates, setMarkedDates] = useState<any>({});
+
+  // Journaling Session State
+  const [isSessionActive, setIsSessionActive] = useState(false);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputText, setInputText] = useState('');
   const [loading, setLoading] = useState(false);
-  const [showCalendar, setShowCalendar] = useState(false);
-  const [markedDates, setMarkedDates] = useState<any>({});
-  
-  // New states for enhanced features
+
+  // Entry Details
   const [selectedMood, setSelectedMood] = useState<string | null>(null);
   const [selectedEmotions, setSelectedEmotions] = useState<string[]>([]);
   const [images, setImages] = useState<string[]>([]);
   const [isRecording, setIsRecording] = useState(false);
   const [recording, setRecording] = useState<Audio.Recording | null>(null);
   const [voiceRecording, setVoiceRecording] = useState<string | null>(null);
-  const [showMoodPicker, setShowMoodPicker] = useState(false);
-  const [showEmotionPicker, setShowEmotionPicker] = useState(false);
+
+  const scrollViewRef = useRef<ScrollView>(null);
 
   useEffect(() => {
     loadProfile();
-    checkTodayJournal();
     loadJournalHistory();
     requestPermissions();
   }, []);
@@ -80,40 +87,8 @@ export default function JournalScreen() {
   const loadProfile = async () => {
     try {
       const response = await fetch(`${API_URL}/api/profile`);
-      if (response.ok) {
-        const data = await response.json();
-        setProfile(data);
-      }
-    } catch (error) {
-      console.error('Error loading profile:', error);
-    }
-  };
-
-  const checkTodayJournal = async () => {
-    try {
-      const response = await fetch(`${API_URL}/api/journals/today`);
-      if (response.ok) {
-        const data = await response.json();
-        if (data) {
-          setTodayJournal(data);
-          setSelectedMood(data.mood);
-          setImages(data.images || []);
-          setVoiceRecording(data.voiceRecording);
-          
-          // Load the conversation
-          const convResponse = await fetch(
-            `${API_URL}/api/conversations/${data.conversationId}`
-          );
-          if (convResponse.ok) {
-            const convData = await convResponse.json();
-            setConversationId(convData.id);
-            setMessages(convData.messages || []);
-          }
-        }
-      }
-    } catch (error) {
-      console.error('Error checking today journal:', error);
-    }
+      if (response.ok) setProfile(await response.json());
+    } catch (e) { console.error(e); }
   };
 
   const loadJournalHistory = async () => {
@@ -121,126 +96,133 @@ export default function JournalScreen() {
       const response = await fetch(`${API_URL}/api/journals?limit=30`);
       if (response.ok) {
         const journals = await response.json();
+        setJournalHistory(journals);
         const marked: any = {};
         journals.forEach((journal: any) => {
-          marked[journal.date] = {
-            marked: true,
-            dotColor: '#A78BFA',
-          };
+          marked[journal.date] = { marked: true, dotColor: Colors.dark.secondary };
         });
         setMarkedDates(marked);
       }
-    } catch (error) {
-      console.error('Error loading journal history:', error);
-    }
+    } catch (e) { console.error(e); }
   };
 
-  const startJournal = async () => {
-    try {
-      setLoading(true);
+  const startNewSession = async () => {
+    setIsSessionActive(true);
+    setConversationId(null);
+    setMessages([]);
+    setSelectedMood(null);
+    setSelectedEmotions([]);
+    setImages([]);
 
-      // Create new conversation
-      const convResponse = await fetch(`${API_URL}/api/conversations`, {
+    // Initial AI Greeting
+    const greeting = "Hi! I'm listening. How was your day? You can speak or type.";
+    setMessages([{ role: 'assistant', content: greeting, timestamp: new Date().toISOString() }]);
+
+    // Create Conversation
+    try {
+      const response = await fetch(`${API_URL}/api/conversations`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ type: 'journal' }),
       });
+      if (response.ok) {
+        const data = await response.json();
+        setConversationId(data.id);
+        Speech.speak(greeting, { language: 'en', rate: 0.9 });
+      }
+    } catch (e) { console.error(e); }
+  };
 
-      if (!convResponse.ok) throw new Error('Failed to create conversation');
+  const endSession = async () => {
+    // Save Journal Entry
+    if (!selectedMood && messages.length < 2) {
+      Alert.alert("Save Entry?", "You haven't added much yet.", [
+        { text: "Discard", style: "destructive", onPress: () => setIsSessionActive(false) },
+        { text: "Keep Editing", style: "cancel" }
+      ]);
+      return;
+    }
 
-      const convData = await convResponse.json();
-      setConversationId(convData.id);
-
-      // Create journal entry
+    try {
+      setLoading(true);
       const today = new Date().toISOString().split('T')[0];
       const journalResponse = await fetch(`${API_URL}/api/journals`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           date: today,
-          conversationId: convData.id,
-          mood: selectedMood,
-          emotion: selectedEmotions[0],
+          conversationId: conversationId,
+          mood: selectedMood || 'okay',
+          emotion: selectedEmotions[0] || 'neutral',
           images: images,
           voiceRecording: voiceRecording,
         }),
       });
 
-      if (!journalResponse.ok) throw new Error('Failed to create journal');
-
-      const journalData = await journalResponse.json();
-      setTodayJournal(journalData);
-
-      // Add welcome message
-      const welcomeMsg = {
-        role: 'assistant' as const,
-        content: "Hey! How did today feel for you? Take your time, I'm here to listen.",
-        timestamp: new Date().toISOString(),
-      };
-      setMessages([welcomeMsg]);
-
-      Speech.speak(welcomeMsg.content, {
-        language: 'en',
-        pitch: 1.0,
-        rate: 0.9,
-      });
-
-      await loadProfile();
-      await loadJournalHistory();
+      if (journalResponse.ok) {
+        Alert.alert("Saved!", "Your journal entry has been saved.");
+        setIsSessionActive(false);
+        loadJournalHistory();
+        loadProfile();
+      }
     } catch (error) {
-      console.error('Error starting journal:', error);
-      Alert.alert('Error', 'Failed to start journal');
+      Alert.alert("Error", "Failed to save journal");
     } finally {
       setLoading(false);
     }
   };
 
   const sendMessage = async () => {
-    if (!inputText.trim() || !conversationId || loading) return;
+    if ((!inputText.trim() && !voiceRecording) || !conversationId || loading) return;
 
-    const userMessage = inputText.trim();
+    const userContent = inputText.trim() || "(Voice Note)";
+    const userMsg: Message = { role: 'user', content: userContent, timestamp: new Date().toISOString() };
+    setMessages(prev => [...prev, userMsg]);
     setInputText('');
     setLoading(true);
-
-    const newUserMessage: Message = {
-      role: 'user',
-      content: userMessage,
-      timestamp: new Date().toISOString(),
-    };
-    setMessages(prev => [...prev, newUserMessage]);
 
     try {
       const response = await fetch(`${API_URL}/api/conversations/message`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          conversationId,
-          content: userMessage,
-          hasVoice: false,
-        }),
+        body: JSON.stringify({ conversationId, content: userContent, hasVoice: !!voiceRecording }),
       });
 
       if (response.ok) {
         const data = await response.json();
         setMessages(data.messages || []);
-
-        if (data.messages && data.messages.length > 0) {
-          const lastMessage = data.messages[data.messages.length - 1];
-          if (lastMessage.role === 'assistant') {
-            Speech.speak(lastMessage.content, {
-              language: 'en',
-              pitch: 1.0,
-              rate: 0.9,
-            });
-          }
+        const lastMsg = data.messages[data.messages.length - 1];
+        if (lastMsg.role === 'assistant') {
+          Speech.speak(lastMsg.content, { rate: 0.9 });
         }
       }
-    } catch (error) {
-      console.error('Error sending message:', error);
-      Alert.alert('Error', 'Failed to send message');
+    } catch (e) {
+      Alert.alert("Error", "Failed to send message");
     } finally {
       setLoading(false);
     }
+  };
+
+  const startRecordingAudio = async () => {
+    try {
+      await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
+      const { recording } = await Audio.Recording.createAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
+      setRecording(recording);
+      setIsRecording(true);
+      Speech.stop(); // Stop AI speaking
+    } catch (e) { }
+  };
+
+  const stopRecordingAudio = async () => {
+    if (!recording) return;
+    setIsRecording(false);
+    await recording.stopAndUnloadAsync();
+    setRecording(null);
+    setVoiceRecording(recording.getURI()); // In real app, convert to base64
+
+    // Simulate sending voice
+    setInputText("I just recorded a voice note about my day.");
+    // In a real implementation, you'd transcribe this on the server
   };
 
   const pickImage = async () => {
@@ -250,590 +232,200 @@ export default function JournalScreen() {
       quality: 0.5,
       base64: true,
     });
-
     if (!result.canceled && result.assets) {
-      const newImages = result.assets.map(asset => 
-        `data:image/jpeg;base64,${asset.base64}`
-      );
-      setImages(prev => [...prev, ...newImages]);
-    }
-  };
-
-  const startRecordingAudio = async () => {
-    try {
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
-      });
-
-      const { recording } = await Audio.Recording.createAsync(
-        Audio.RecordingOptionsPresets.HIGH_QUALITY
-      );
-      setRecording(recording);
-      setIsRecording(true);
-    } catch (error) {
-      console.error('Failed to start recording:', error);
-    }
-  };
-
-  const stopRecordingAudio = async () => {
-    if (!recording) return;
-
-    try {
-      setIsRecording(false);
-      await recording.stopAndUnloadAsync();
-      const uri = recording.getURI();
-      // TODO: Convert to base64
-      setRecording(null);
-      Alert.alert('Recorded!', 'Voice note saved');
-    } catch (error) {
-      console.error('Failed to stop recording:', error);
+      setImages(prev => [...prev, ...result.assets.map(a => `data:image/jpeg;base64,${a.base64}`)]);
     }
   };
 
   const toggleEmotion = (emotion: string) => {
-    if (selectedEmotions.includes(emotion)) {
-      setSelectedEmotions(prev => prev.filter(e => e !== emotion));
-    } else if (selectedEmotions.length < 3) {
-      setSelectedEmotions(prev => [...prev, emotion]);
-    }
-  };
-
-  const getMoodConfig = (moodValue: string) => {
-    return MOODS.find(m => m.value === moodValue) || MOODS[3];
+    if (selectedEmotions.includes(emotion)) setSelectedEmotions(p => p.filter(e => e !== emotion));
+    else if (selectedEmotions.length < 3) setSelectedEmotions(p => [...p, emotion]);
   };
 
   return (
-    <SafeAreaView style={styles.container}>
-      {/* Header */}
-      <BlurView intensity={80} tint="dark" style={styles.header}>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.headerTitle}>Journal</Text>
-          <View style={styles.streakContainer}>
-            <MaterialCommunityIcons name="fire" size={18} color="#F59E0B" />
-            <Text style={styles.streakText}>
-              {profile?.currentStreak || 0} day streak
-            </Text>
-          </View>
-        </View>
-        <TouchableOpacity
-          style={styles.iconButton}
-          onPress={() => setShowCalendar(!showCalendar)}
-        >
-          <MaterialCommunityIcons
-            name="calendar-month"
-            size={24}
-            color="#A78BFA"
-          />
-        </TouchableOpacity>
-      </BlurView>
+    <View style={styles.container}>
+      <LinearGradient colors={[Colors.dark.background, '#1e1b4b']} style={StyleSheet.absoluteFill} />
 
-      {/* Calendar */}
-      {showCalendar && (
-        <View style={styles.calendarContainer}>
-          <Calendar
-            markedDates={markedDates}
-            theme={{
-              calendarBackground: 'rgba(31, 31, 31, 0.95)',
-              textSectionTitleColor: '#9CA3AF',
-              dayTextColor: '#FFFFFF',
-              todayTextColor: '#A78BFA',
-              monthTextColor: '#FFFFFF',
-              textDisabledColor: '#4B5563',
-            }}
-          />
-        </View>
-      )}
-
-      {!todayJournal || !conversationId ? (
-        /* Empty State */
-        <ScrollView contentContainerStyle={styles.emptyState}>
-          <View style={styles.emptyContent}>
-            <View style={styles.gradientIcon}>
-              <MaterialCommunityIcons
-                name="book-open-page-variant"
-                size={64}
-                color="#A78BFA"
-              />
+      {/* Main Timeline View */}
+      <GlassView intensity={50} style={styles.header}>
+        <SafeAreaView>
+          <View style={styles.headerContent}>
+            <View>
+              <Typo variant="h2" weight="bold">Journal</Typo>
+              <View style={styles.streakContainer}>
+                <MaterialCommunityIcons name="fire" size={18} color="#F59E0B" />
+                <Typo variant="caption" style={{ marginLeft: 4 }}>{profile?.currentStreak || 0} day streak</Typo>
+              </View>
             </View>
-            <Text style={styles.emptyTitle}>Today's Journal</Text>
-            <Text style={styles.emptySubtitle}>
-              Take a moment to reflect and capture your thoughts
-            </Text>
-
-            {/* Mood Selector */}
-            <View style={styles.section}>
-              <Text style={styles.sectionLabel}>How are you feeling?</Text>
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={styles.moodScroll}
-              >
-                {MOODS.map(mood => (
-                  <TouchableOpacity
-                    key={mood.value}
-                    style={[
-                      styles.moodChip,
-                      selectedMood === mood.value && {
-                        backgroundColor: mood.color + '20',
-                        borderColor: mood.color,
-                      },
-                    ]}
-                    onPress={() => setSelectedMood(mood.value)}
-                  >
-                    <MaterialCommunityIcons
-                      name={mood.icon as any}
-                      size={32}
-                      color={mood.color}
-                    />
-                    <Text
-                      style={[
-                        styles.moodLabel,
-                        selectedMood === mood.value && { color: mood.color },
-                      ]}
-                    >
-                      {mood.label}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
-            </View>
-
-            {/* Emotion Tags */}
-            {selectedMood && (
-              <View style={styles.section}>
-                <Text style={styles.sectionLabel}>
-                  What emotions? (Pick up to 3)
-                </Text>
-                <View style={styles.emotionGrid}>
-                  {EMOTIONS.map(emotion => (
-                    <TouchableOpacity
-                      key={emotion}
-                      style={[
-                        styles.emotionTag,
-                        selectedEmotions.includes(emotion) &&
-                          styles.emotionTagSelected,
-                      ]}
-                      onPress={() => toggleEmotion(emotion)}
-                    >
-                      <Text
-                        style={[
-                          styles.emotionTagText,
-                          selectedEmotions.includes(emotion) &&
-                            styles.emotionTagTextSelected,
-                        ]}
-                      >
-                        {emotion}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              </View>
-            )}
-
-            {/* Media Options */}
-            {selectedMood && (
-              <View style={styles.mediaOptions}>
-                <TouchableOpacity style={styles.mediaButton} onPress={pickImage}>
-                  <MaterialCommunityIcons name="image-plus" size={24} color="#A78BFA" />
-                  <Text style={styles.mediaButtonText}>Add Photos</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={styles.mediaButton}
-                  onPressIn={startRecordingAudio}
-                  onPressOut={stopRecordingAudio}
-                >
-                  <MaterialCommunityIcons
-                    name={isRecording ? 'microphone' : 'microphone-outline'}
-                    size={24}
-                    color={isRecording ? '#EF4444' : '#A78BFA'}
-                  />
-                  <Text style={styles.mediaButtonText}>
-                    {isRecording ? 'Recording...' : 'Voice Note'}
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            )}
-
-            {/* Selected Images Preview */}
-            {images.length > 0 && (
-              <View style={styles.imagePreview}>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                  {images.map((img, idx) => (
-                    <Image key={idx} source={{ uri: img }} style={styles.previewImage} />
-                  ))}
-                </ScrollView>
-              </View>
-            )}
-
-            <TouchableOpacity
-              style={[styles.startButton, !selectedMood && styles.startButtonDisabled]}
-              onPress={startJournal}
-              disabled={loading || !selectedMood}
-            >
-              {loading ? (
-                <ActivityIndicator color="#FFFFFF" />
-              ) : (
-                <>
-                  <Text style={styles.startButtonText}>Start Writing</Text>
-                  <MaterialCommunityIcons name="arrow-right" size={20} color="#FFFFFF" />
-                </>
-              )}
+            <TouchableOpacity onPress={() => setShowCalendar(!showCalendar)} style={styles.iconButton}>
+              <MaterialCommunityIcons name="calendar-month" size={24} color={Colors.dark.tint} />
             </TouchableOpacity>
           </View>
-        </ScrollView>
-      ) : (
-        /* Active Journal */
-        <View style={{ flex: 1, paddingBottom: 65 }}>
-          {/* Mood & Emotion Display */}
-          {selectedMood && (
-            <View style={styles.activeMoodBar}>
-              <MaterialCommunityIcons
-                name={getMoodConfig(selectedMood).icon as any}
-                size={20}
-                color={getMoodConfig(selectedMood).color}
-              />
-              <Text style={styles.activeMoodText}>
-                {getMoodConfig(selectedMood).label}
-              </Text>
-              {selectedEmotions.length > 0 && (
-                <Text style={styles.activeEmotions}>
-                  • {selectedEmotions.join(', ')}
-                </Text>
+        </SafeAreaView>
+      </GlassView>
+
+      <ScrollView contentContainerStyle={styles.content}>
+        {/* Hero "New Entry" Card */}
+        <TouchableOpacity onPress={startNewSession}>
+          <LinearGradient
+            colors={Colors.dark.accentGradient as any}
+            start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
+            style={styles.heroCard}
+          >
+            <View style={styles.heroContent}>
+              <View style={styles.heroIcon}>
+                <MaterialCommunityIcons name="microphone" size={32} color="white" />
+              </View>
+              <View>
+                <Typo variant="h3" weight="bold" color="white">Capture the Moment</Typo>
+                <Typo variant="caption" color="rgba(255,255,255,0.8)">Tap to speak with AI • Reflect on your day</Typo>
+              </View>
+            </View>
+          </LinearGradient>
+        </TouchableOpacity>
+
+        <Typo variant="label" style={{ marginBottom: 12, marginTop: 24 }}>Recent Memories</Typo>
+
+        {journalHistory.map((journal: any, i) => (
+          <BentoCard key={i} style={{ marginBottom: 16 }}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>
+              <Typo variant="caption" color={Colors.dark.textMuted}>{journal.date}</Typo>
+              {journal.mood && (
+                <MaterialCommunityIcons
+                  name={MOODS.find(m => m.value === journal.mood)?.icon as any || 'emoticon-neutral'}
+                  size={20}
+                  color={MOODS.find(m => m.value === journal.mood)?.color || Colors.dark.textMuted}
+                />
               )}
             </View>
-          )}
+            {journal.images && journal.images.length > 0 && (
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 12 }}>
+                {journal.images.map((img: string, idx: number) => (
+                  <Image key={idx} source={{ uri: img }} style={styles.journalImage} />
+                ))}
+              </ScrollView>
+            )}
+            <Typo variant="body" numberOfLines={3} style={{ opacity: 0.8 }}>
+              {journal.summary || "Journal entry..."}
+            </Typo>
+          </BentoCard>
+        ))}
+      </ScrollView>
 
-          {/* Messages */}
+      {/* Journaling Session Modal */}
+      <Modal visible={isSessionActive} animationType="slide" presentationStyle="pageSheet">
+        <View style={styles.modalContainer}>
+          <LinearGradient colors={[Colors.dark.background, '#1e1b4b']} style={StyleSheet.absoluteFill} />
+
+          {/* Modal Header */}
+          <View style={styles.modalHeader}>
+            <TouchableOpacity onPress={() => setIsSessionActive(false)}>
+              <Typo variant="body" color={Colors.dark.error}>Cancel</Typo>
+            </TouchableOpacity>
+            <Typo variant="h3" weight="bold">New Entry</Typo>
+            <TouchableOpacity onPress={endSession}>
+              <Typo variant="body" weight="bold" color={Colors.dark.primary}>Done</Typo>
+            </TouchableOpacity>
+          </View>
+
+          {/* Chat Area */}
           <ScrollView
-            style={styles.messagesContainer}
-            contentContainerStyle={styles.messagesContent}
+            ref={scrollViewRef}
+            style={styles.chatArea}
+            contentContainerStyle={{ paddingBottom: 20 }}
+            onContentSizeChange={() => scrollViewRef.current?.scrollToEnd({ animated: true })}
           >
-            {messages.map((message, index) => (
-              <View
-                key={index}
-                style={[
-                  styles.messageBubble,
-                  message.role === 'user' ? styles.userMessage : styles.assistantMessage,
-                ]}
-              >
-                <Text
-                  style={[
-                    styles.messageText,
-                    message.role === 'user'
-                      ? styles.userMessageText
-                      : styles.assistantMessageText,
-                  ]}
-                >
-                  {message.content}
-                </Text>
+            {messages.map((msg, i) => (
+              <View key={i} style={[
+                styles.msgBubble,
+                msg.role === 'user' ? styles.userMsg : styles.aiMsg
+              ]}>
+                <Typo color={msg.role === 'user' ? 'white' : Colors.dark.text}>
+                  {msg.content}
+                </Typo>
               </View>
             ))}
-            {loading && (
-              <View style={[styles.messageBubble, styles.assistantMessage]}>
-                <ActivityIndicator color="#A78BFA" />
-              </View>
-            )}
+            {loading && <ActivityIndicator color={Colors.dark.primary} style={{ marginTop: 20 }} />}
           </ScrollView>
 
-          {/* Input */}
-          <BlurView intensity={80} tint="dark" style={styles.inputContainer}>
+          {/* Tools Area */}
+          <GlassView intensity={50} style={styles.toolsArea}>
+            {/* Mood Selector (Horizontal) */}
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ maxHeight: 60, marginBottom: 12 }}>
+              {MOODS.map(mood => (
+                <TouchableOpacity
+                  key={mood.value}
+                  onPress={() => setSelectedMood(mood.value)}
+                  style={[
+                    styles.moodChip,
+                    selectedMood === mood.value && { backgroundColor: mood.color + '20', borderColor: mood.color }
+                  ]}
+                >
+                  <MaterialCommunityIcons name={mood.icon as any} size={20} color={mood.color} />
+                  <Typo variant="caption" style={{ marginLeft: 4 }}>{mood.label}</Typo>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+
+            {/* Input Bar */}
             <View style={styles.inputRow}>
+              <TouchableOpacity onPress={pickImage} style={styles.toolBtn}>
+                <MaterialCommunityIcons name="image-plus" size={24} color={Colors.dark.secondary} />
+              </TouchableOpacity>
+
               <TextInput
                 style={styles.input}
                 value={inputText}
                 onChangeText={setInputText}
-                placeholder="Continue writing..."
-                placeholderTextColor="#6B7280"
+                placeholder="Type or speak..."
+                placeholderTextColor={Colors.dark.textMuted}
                 multiline
-                maxLength={2000}
               />
 
               <TouchableOpacity
-                style={[
-                  styles.sendButton,
-                  (!inputText.trim() || loading) && styles.sendButtonDisabled,
-                ]}
-                onPress={sendMessage}
-                disabled={!inputText.trim() || loading}
+                onPressIn={startRecordingAudio}
+                onPressOut={stopRecordingAudio}
+                onPress={() => !isRecording && sendMessage()}
+                style={[styles.actionBtn, isRecording && { backgroundColor: Colors.dark.error }]}
               >
                 <MaterialCommunityIcons
-                  name="send"
-                  size={22}
-                  color={inputText.trim() && !loading ? '#FFFFFF' : '#6B7280'}
+                  name={isRecording ? "microphone-off" : (inputText ? "arrow-up" : "microphone")}
+                  size={24}
+                  color="white"
                 />
               </TouchableOpacity>
             </View>
-          </BlurView>
+          </GlassView>
         </View>
-      )}
-    </SafeAreaView>
+      </Modal>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#0A0A0A',
-  },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(167, 139, 250, 0.2)',
-  },
-  headerTitle: {
-    fontSize: 28,
-    fontWeight: '700',
-    color: '#FFFFFF',
-    letterSpacing: -0.5,
-  },
-  streakContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginTop: 4,
-  },
-  streakText: {
-    fontSize: 13,
-    color: '#F59E0B',
-    fontWeight: '600',
-  },
-  iconButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: 'rgba(167, 139, 250, 0.15)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  calendarContainer: {
-    backgroundColor: 'rgba(31, 31, 31, 0.95)',
-    padding: 12,
-  },
-  emptyState: {
-    flexGrow: 1,
-    paddingHorizontal: 20,
-    paddingBottom: 80,
-  },
-  emptyContent: {
-    flex: 1,
-    paddingTop: 40,
-  },
-  gradientIcon: {
-    width: 120,
-    height: 120,
-    borderRadius: 60,
-    backgroundColor: 'rgba(167, 139, 250, 0.15)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    alignSelf: 'center',
-    marginBottom: 24,
-  },
-  emptyTitle: {
-    fontSize: 28,
-    fontWeight: '700',
-    color: '#FFFFFF',
-    textAlign: 'center',
-    marginBottom: 8,
-  },
-  emptySubtitle: {
-    fontSize: 15,
-    color: '#9CA3AF',
-    textAlign: 'center',
-    lineHeight: 22,
-    marginBottom: 32,
-  },
-  section: {
-    marginBottom: 24,
-  },
-  sectionLabel: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#E5E7EB',
-    marginBottom: 12,
-  },
-  moodScroll: {
-    paddingVertical: 8,
-    gap: 12,
-  },
-  moodChip: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 16,
-    paddingHorizontal: 20,
-    borderRadius: 20,
-    backgroundColor: 'rgba(31, 31, 31, 0.8)',
-    borderWidth: 2,
-    borderColor: 'transparent',
-    gap: 8,
-    minWidth: 100,
-  },
-  moodLabel: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#9CA3AF',
-  },
-  emotionGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 10,
-  },
-  emotionTag: {
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 20,
-    backgroundColor: 'rgba(31, 31, 31, 0.8)',
-    borderWidth: 1,
-    borderColor: 'rgba(167, 139, 250, 0.3)',
-  },
-  emotionTagSelected: {
-    backgroundColor: 'rgba(167, 139, 250, 0.25)',
-    borderColor: '#A78BFA',
-  },
-  emotionTagText: {
-    fontSize: 14,
-    color: '#9CA3AF',
-    fontWeight: '500',
-  },
-  emotionTagTextSelected: {
-    color: '#A78BFA',
-  },
-  mediaOptions: {
-    flexDirection: 'row',
-    gap: 12,
-    marginBottom: 20,
-  },
-  mediaButton: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    paddingVertical: 14,
-    borderRadius: 16,
-    backgroundColor: 'rgba(167, 139, 250, 0.15)',
-    borderWidth: 1,
-    borderColor: 'rgba(167, 139, 250, 0.3)',
-  },
-  mediaButtonText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#A78BFA',
-  },
-  imagePreview: {
-    marginBottom: 20,
-  },
-  previewImage: {
-    width: 80,
-    height: 80,
-    borderRadius: 12,
-    marginRight: 8,
-  },
-  startButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    backgroundColor: '#A78BFA',
-    paddingVertical: 16,
-    borderRadius: 16,
-    marginTop: 12,
-  },
-  startButtonDisabled: {
-    backgroundColor: 'rgba(107, 114, 128, 0.3)',
-  },
-  startButtonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  activeMoodBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    backgroundColor: 'rgba(31, 31, 31, 0.8)',
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(167, 139, 250, 0.2)',
-  },
-  activeMoodText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#FFFFFF',
-  },
-  activeEmotions: {
-    fontSize: 13,
-    color: '#9CA3AF',
-  },
-  messagesContainer: {
-    flex: 1,
-  },
-  messagesContent: {
-    padding: 16,
-    gap: 12,
-  },
-  messageBubble: {
-    maxWidth: '85%',
-    padding: 14,
-    borderRadius: 20,
-    marginVertical: 4,
-  },
-  userMessage: {
-    alignSelf: 'flex-end',
-    backgroundColor: 'rgba(167, 139, 250, 0.9)',
-  },
-  assistantMessage: {
-    alignSelf: 'flex-start',
-    backgroundColor: 'rgba(31, 31, 31, 0.9)',
-  },
-  messageText: {
-    fontSize: 15,
-    lineHeight: 22,
-  },
-  userMessageText: {
-    color: '#FFFFFF',
-  },
-  assistantMessageText: {
-    color: '#E5E7EB',
-  },
-  inputContainer: {
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(167, 139, 250, 0.2)',
-  },
-  inputRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    gap: 12,
-  },
-  input: {
-    flex: 1,
-    backgroundColor: 'rgba(31, 31, 31, 0.8)',
-    borderRadius: 22,
-    paddingHorizontal: 18,
-    paddingVertical: 12,
-    color: '#FFFFFF',
-    fontSize: 15,
-    maxHeight: 100,
-    borderWidth: 1,
-    borderColor: 'rgba(167, 139, 250, 0.3)',
-  },
-  sendButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#A78BFA',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  sendButtonDisabled: {
-    backgroundColor: 'rgba(107, 114, 128, 0.3)',
-  },
+  container: { flex: 1, backgroundColor: Colors.dark.background },
+  header: { borderBottomWidth: 1, borderBottomColor: Colors.dark.glassBorder, paddingTop: Platform.OS === 'android' ? 40 : 0 },
+  headerContent: { padding: 20, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  streakContainer: { flexDirection: 'row', alignItems: 'center', marginTop: 4 },
+  iconButton: { width: 40, height: 40, borderRadius: 20, backgroundColor: Colors.dark.surface, justifyContent: 'center', alignItems: 'center' },
+  content: { padding: 20, paddingBottom: 100 },
+  heroCard: { padding: 24, borderRadius: 28, marginBottom: 8 },
+  heroContent: { flexDirection: 'row', alignItems: 'center', gap: 16 },
+  heroIcon: { width: 56, height: 56, borderRadius: 28, backgroundColor: 'rgba(255,255,255,0.2)', justifyContent: 'center', alignItems: 'center' },
+  journalImage: { width: 80, height: 80, borderRadius: 12, marginRight: 8 },
+
+  // Modal Styles
+  modalContainer: { flex: 1, backgroundColor: Colors.dark.background },
+  modalHeader: { padding: 20, paddingTop: 60, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.2)' },
+  chatArea: { flex: 1, padding: 20 },
+  msgBubble: { maxWidth: '85%', padding: 16, borderRadius: 20, marginBottom: 12 },
+  userMsg: { alignSelf: 'flex-end', backgroundColor: Colors.dark.primary, borderBottomRightRadius: 4 },
+  aiMsg: { alignSelf: 'flex-start', backgroundColor: Colors.dark.surface, borderTopLeftRadius: 4 },
+
+  toolsArea: { padding: 16, paddingBottom: 40, borderTopWidth: 1, borderColor: Colors.dark.glassBorder },
+  moodChip: { flexDirection: 'row', alignItems: 'center', padding: 8, paddingHorizontal: 16, borderRadius: 20, backgroundColor: Colors.dark.surface, marginRight: 8, borderWidth: 1, borderColor: 'transparent' },
+  inputRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 12 },
+  toolBtn: { padding: 10 },
+  input: { flex: 1, backgroundColor: Colors.dark.surface, borderRadius: 20, padding: 12, paddingTop: 12, color: 'white', maxHeight: 100 },
+  actionBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: Colors.dark.primary, justifyContent: 'center', alignItems: 'center' },
 });
