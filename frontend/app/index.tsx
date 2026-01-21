@@ -23,6 +23,14 @@ export default function WelcomeScreen() {
 
   const checkOnboardingStatus = async () => {
     try {
+      // First check if disclaimer has been accepted
+      const disclaimerAccepted = await AsyncStorage.getItem('disclaimerAccepted');
+      if (disclaimerAccepted !== 'true') {
+        // Show disclaimer screen first
+        router.replace('/disclaimer');
+        return;
+      }
+
       const onboardingComplete = await AsyncStorage.getItem('onboardingComplete');
       if (onboardingComplete === 'true') {
         // User has completed onboarding, go directly to home

@@ -43,7 +43,7 @@ export default function TabsLayout() {
             <View style={{ alignItems: 'center', top: Platform.OS === 'ios' ? 10 : 0 }}>
               <MaterialCommunityIcons
                 name={focused ? "home" : "home-outline"}
-                size={26}
+                size={24}
                 color={color}
               />
               {focused && <View style={styles.activeDot} />}
@@ -59,7 +59,23 @@ export default function TabsLayout() {
             <View style={{ alignItems: 'center', top: Platform.OS === 'ios' ? 10 : 0 }}>
               <MaterialCommunityIcons
                 name={focused ? "microphone" : "microphone-outline"}
-                size={26}
+                size={24}
+                color={color}
+              />
+              {focused && <View style={styles.activeDot} />}
+            </View>
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="library"
+        options={{
+          title: 'Library',
+          tabBarIcon: ({ color, focused }) => (
+            <View style={{ alignItems: 'center', top: Platform.OS === 'ios' ? 10 : 0 }}>
+              <MaterialCommunityIcons
+                name={focused ? "book-open-variant" : "book-open-outline"}
+                size={24}
                 color={color}
               />
               {focused && <View style={styles.activeDot} />}
@@ -76,7 +92,7 @@ export default function TabsLayout() {
               <View style={[styles.journalButton, focused && styles.journalButtonActive]}>
                 <MaterialCommunityIcons
                   name="notebook"
-                  size={26}
+                  size={24}
                   color={focused ? 'white' : Colors.dark.surface}
                 />
               </View>
@@ -92,7 +108,7 @@ export default function TabsLayout() {
             <View style={{ alignItems: 'center', top: Platform.OS === 'ios' ? 10 : 0 }}>
               <MaterialCommunityIcons
                 name={focused ? "chart-line" : "chart-line-variant"}
-                size={26}
+                size={24}
                 color={color}
               />
               {focused && <View style={styles.activeDot} />}
@@ -108,7 +124,7 @@ export default function TabsLayout() {
             <View style={{ alignItems: 'center', top: Platform.OS === 'ios' ? 10 : 0 }}>
               <MaterialCommunityIcons
                 name={focused ? "account-circle" : "account-circle-outline"}
-                size={26}
+                size={24}
                 color={color}
               />
               {focused && <View style={styles.activeDot} />}
@@ -136,18 +152,18 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   journalButton: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
     backgroundColor: Colors.dark.primary,
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 28,
+    marginBottom: 24,
     shadowColor: Colors.dark.primary,
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.2,
     shadowRadius: 8,
-    borderWidth: 4,
+    borderWidth: 3,
     borderColor: Colors.dark.surface,
   },
   journalButtonActive: {

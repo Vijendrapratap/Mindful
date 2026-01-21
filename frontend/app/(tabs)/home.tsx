@@ -24,12 +24,14 @@ import { BentoCard } from '../../components/ui/BentoCard';
 const { width } = Dimensions.get('window');
 const API_URL = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://localhost:8001';
 
+// PRD Mood Colors: Amazing, Happy, Calm, Okay, Sad, Anxious
 const MOODS = [
-    { id: 'great', emoji: '😊', label: 'Great', color: '#22C55E' },
-    { id: 'good', emoji: '🙂', label: 'Good', color: '#84CC16' },
-    { id: 'okay', emoji: '😐', label: 'Okay', color: '#F59E0B' },
-    { id: 'low', emoji: '😔', label: 'Low', color: '#9CA3AF' },
-    { id: 'anxious', emoji: '😰', label: 'Anxious', color: '#F87171' },
+    { id: 'amazing', emoji: '🤩', label: 'Amazing', color: '#22C55E' },
+    { id: 'happy', emoji: '😊', label: 'Happy', color: '#F59E61' },
+    { id: 'calm', emoji: '😌', label: 'Calm', color: '#3BB6C6' },
+    { id: 'okay', emoji: '😐', label: 'Okay', color: '#A7A9A9' },
+    { id: 'sad', emoji: '😔', label: 'Sad', color: '#C01537' },
+    { id: 'anxious', emoji: '😰', label: 'Anxious', color: '#FF5459' },
 ];
 
 const getGreeting = () => {

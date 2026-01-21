@@ -51,6 +51,12 @@ interface Message {
   timestamp: string;
 }
 
+interface ReflectionCard {
+  type: 'theme' | 'tone' | 'suggestion';
+  title: string;
+  content: string;
+}
+
 export default function JournalScreen() {
   const [profile, setProfile] = useState<any>(null);
   const [journalHistory, setJournalHistory] = useState<any[]>([]);
@@ -71,6 +77,11 @@ export default function JournalScreen() {
   const [isRecording, setIsRecording] = useState(false);
   const [recording, setRecording] = useState<Audio.Recording | null>(null);
   const [voiceRecording, setVoiceRecording] = useState<string | null>(null);
+
+  // Reflection Cards
+  const [reflectionCards, setReflectionCards] = useState<ReflectionCard[]>([]);
+  const [showReflectionCards, setShowReflectionCards] = useState(false);
+  const [loadingReflection, setLoadingReflection] = useState(false);
 
   const scrollViewRef = useRef<ScrollView>(null);
 
@@ -152,6 +163,37 @@ export default function JournalScreen() {
     }
   };
 
+  const generateReflectionCards = async () => {
+    if (messages.length < 2) return;
+
+    setLoadingReflection(true);
+    try {
+      const journalContent = messages
+        .filter(m => m.role === 'user')
+        .map(m => m.content)
+        .join(' ');
+
+      const response = await fetch(`${API_URL}/api/reflection-cards`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          journalContent,
+          conversationHistory: messages,
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setReflectionCards(data.cards || []);
+        setShowReflectionCards(true);
+      }
+    } catch (e) {
+      console.error('Error generating reflection cards:', e);
+    } finally {
+      setLoadingReflection(false);
+    }
+  };
+
   const endSession = async () => {
     // Save Journal Entry
     if (!selectedMood && messages.length < 2) {
@@ -179,16 +221,29 @@ export default function JournalScreen() {
       });
 
       if (journalResponse.ok) {
-        Alert.alert("Saved!", "Your journal entry has been saved.");
-        setIsSessionActive(false);
-        loadJournalHistory();
-        loadProfile();
+        // Generate reflection cards after saving
+        await generateReflectionCards();
+
+        if (!showReflectionCards) {
+          Alert.alert("Saved!", "Your journal entry has been saved.");
+          setIsSessionActive(false);
+          loadJournalHistory();
+          loadProfile();
+        }
       }
     } catch (error) {
       Alert.alert("Error", "Failed to save journal");
     } finally {
       setLoading(false);
     }
+  };
+
+  const dismissReflectionCards = () => {
+    setShowReflectionCards(false);
+    setReflectionCards([]);
+    setIsSessionActive(false);
+    loadJournalHistory();
+    loadProfile();
   };
 
   const sendMessage = async () => {
@@ -498,6 +553,82 @@ export default function JournalScreen() {
           </GlassView>
         </View>
       </Modal>
+
+      {/* Reflection Cards Modal */}
+      <Modal visible={showReflectionCards} animationType="fade" transparent>
+        <View style={styles.reflectionModalContainer}>
+          <GlassView intensity={90} style={styles.reflectionModal}>
+            <View style={styles.reflectionHeader}>
+              <View style={styles.reflectionTitleRow}>
+                <MaterialCommunityIcons name="lightbulb-on" size={28} color={Colors.dark.secondary} />
+                <Typo variant="h3" weight="bold" style={{ marginLeft: 12 }}>Reflections</Typo>
+              </View>
+              <Typo variant="caption" color={Colors.dark.textMuted} style={{ marginTop: 8 }}>
+                Insights from your journal entry
+              </Typo>
+            </View>
+
+            {loadingReflection ? (
+              <View style={styles.reflectionLoading}>
+                <ActivityIndicator size="large" color={Colors.dark.primary} />
+                <Typo variant="body" color={Colors.dark.textMuted} style={{ marginTop: 16 }}>
+                  Generating your reflections...
+                </Typo>
+              </View>
+            ) : (
+              <ScrollView style={styles.reflectionCardsScroll} showsVerticalScrollIndicator={false}>
+                {reflectionCards.map((card, index) => (
+                  <View key={index} style={styles.reflectionCard}>
+                    <View style={[
+                      styles.reflectionCardIcon,
+                      { backgroundColor: card.type === 'theme' ? '#8B5CF620' :
+                                         card.type === 'tone' ? '#F59E0B20' : '#10B98120' }
+                    ]}>
+                      <MaterialCommunityIcons
+                        name={
+                          card.type === 'theme' ? 'tag-heart' :
+                          card.type === 'tone' ? 'emoticon' : 'lightbulb-outline'
+                        }
+                        size={24}
+                        color={
+                          card.type === 'theme' ? '#8B5CF6' :
+                          card.type === 'tone' ? '#F59E0B' : '#10B981'
+                        }
+                      />
+                    </View>
+                    <View style={styles.reflectionCardContent}>
+                      <Typo variant="label" weight="semibold" style={{ marginBottom: 4 }}>
+                        {card.title}
+                      </Typo>
+                      <Typo variant="body" color={Colors.dark.textMuted}>
+                        {card.content}
+                      </Typo>
+                    </View>
+                  </View>
+                ))}
+
+                {reflectionCards.length === 0 && !loadingReflection && (
+                  <View style={styles.noReflections}>
+                    <MaterialCommunityIcons name="thought-bubble" size={48} color={Colors.dark.textMuted} />
+                    <Typo variant="body" color={Colors.dark.textMuted} style={{ marginTop: 12, textAlign: 'center' }}>
+                      No reflections generated yet. Write more to get insights!
+                    </Typo>
+                  </View>
+                )}
+              </ScrollView>
+            )}
+
+            <TouchableOpacity style={styles.reflectionDismissBtn} onPress={dismissReflectionCards}>
+              <LinearGradient
+                colors={Colors.dark.accentGradient as any}
+                style={styles.reflectionDismissBtnGradient}
+              >
+                <Typo variant="body" weight="bold" color="white">Continue</Typo>
+              </LinearGradient>
+            </TouchableOpacity>
+          </GlassView>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -533,4 +664,62 @@ const styles = StyleSheet.create({
   calendarModalContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.5)' },
   calendarModal: { width: width - 40, borderRadius: 24, padding: 20 },
   calendarHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
+
+  // Reflection Cards Modal Styles
+  reflectionModalContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.7)'
+  },
+  reflectionModal: {
+    width: width - 40,
+    maxHeight: '80%',
+    borderRadius: 28,
+    padding: 24,
+  },
+  reflectionHeader: {
+    marginBottom: 24,
+  },
+  reflectionTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center'
+  },
+  reflectionLoading: {
+    alignItems: 'center',
+    paddingVertical: 60
+  },
+  reflectionCardsScroll: {
+    maxHeight: 400
+  },
+  reflectionCard: {
+    flexDirection: 'row',
+    backgroundColor: Colors.dark.surface,
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 12
+  },
+  reflectionCardIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 16,
+  },
+  reflectionCardContent: {
+    flex: 1
+  },
+  noReflections: {
+    alignItems: 'center',
+    paddingVertical: 40
+  },
+  reflectionDismissBtn: {
+    marginTop: 20
+  },
+  reflectionDismissBtnGradient: {
+    paddingVertical: 16,
+    borderRadius: 16,
+    alignItems: 'center'
+  },
 });

@@ -387,10 +387,136 @@ try:
 except ImportError:
     acompletion = None
 
-# ... (imports) ...
-
 # Get API Key
 OPENROUTER_API_KEY = os.environ.get('OPENROUTER_API_KEY')
+
+# ==================== CRISIS DETECTION ====================
+
+# Crisis keywords and phrases for detection
+CRISIS_KEYWORDS = {
+    'high_risk': [
+        'suicide', 'kill myself', 'end my life', 'want to die', 'better off dead',
+        'no reason to live', 'ending it', 'goodbye everyone', 'final goodbye',
+        'self harm', 'hurt myself', 'cutting myself', 'overdose',
+        'kill her', 'kill him', 'kill them', 'murder',
+    ],
+    'medium_risk': [
+        'worthless', 'hopeless', 'nobody cares', 'no one would miss me',
+        'tired of living', 'cant go on', "can't take it anymore", 'give up',
+        'hate myself', 'dont want to be here', "don't want to wake up",
+        'never be happy', 'pointless', 'burden to everyone',
+    ],
+    'low_risk': [
+        'depressed', 'anxious', 'overwhelmed', 'stressed out', 'struggling',
+        'feeling down', 'cant cope', 'falling apart', 'losing it',
+    ]
+}
+
+# Crisis resources by region (US focused for now)
+CRISIS_RESOURCES = {
+    'us': {
+        'suicide_hotline': '988 (Suicide & Crisis Lifeline)',
+        'crisis_text': 'Text HOME to 741741',
+        'emergency': '911',
+        'website': 'https://988lifeline.org'
+    },
+    'international': {
+        'website': 'https://findahelpline.com'
+    }
+}
+
+def detect_crisis_level(message: str) -> dict:
+    """
+    Detect if a message contains crisis indicators.
+    Returns: { level: 'none'|'low'|'medium'|'high', matched_keywords: [], response_type: str }
+    """
+    message_lower = message.lower()
+    result = {
+        'level': 'none',
+        'matched_keywords': [],
+        'requires_intervention': False,
+        'show_resources': False
+    }
+
+    # Check high risk keywords first
+    for keyword in CRISIS_KEYWORDS['high_risk']:
+        if keyword in message_lower:
+            result['level'] = 'high'
+            result['matched_keywords'].append(keyword)
+            result['requires_intervention'] = True
+            result['show_resources'] = True
+
+    if result['level'] == 'high':
+        return result
+
+    # Check medium risk keywords
+    for keyword in CRISIS_KEYWORDS['medium_risk']:
+        if keyword in message_lower:
+            result['level'] = 'medium'
+            result['matched_keywords'].append(keyword)
+            result['show_resources'] = True
+
+    if result['level'] == 'medium':
+        return result
+
+    # Check low risk keywords
+    for keyword in CRISIS_KEYWORDS['low_risk']:
+        if keyword in message_lower:
+            result['level'] = 'low'
+            result['matched_keywords'].append(keyword)
+
+    return result
+
+def get_crisis_response(crisis_level: str) -> str:
+    """Get appropriate crisis response based on severity level"""
+    if crisis_level == 'high':
+        return """I hear that you're going through something really difficult right now. Your safety matters to me, and I want to make sure you get the support you deserve.
+
+If you're in immediate danger, please reach out to:
+- 988 (Suicide & Crisis Lifeline) - Call or text anytime
+- Text HOME to 741741 (Crisis Text Line)
+- 911 for emergencies
+
+You're not alone in this. Would you like to talk about what's happening?"""
+
+    elif crisis_level == 'medium':
+        return """I can hear that you're really struggling right now, and I want you to know that what you're feeling matters. These feelings can be overwhelming, but they don't have to be faced alone.
+
+If you need to talk to someone right now:
+- 988 Suicide & Crisis Lifeline (call or text 988)
+- Crisis Text Line (text HOME to 741741)
+
+I'm here to listen. Would you like to tell me more about what's going on?"""
+
+    else:  # low
+        return None  # AI will handle normally but with extra care
+
+async def log_crisis_event(profile_id: str, message: str, crisis_level: str, matched_keywords: list):
+    """Log crisis detection for safety monitoring"""
+    try:
+        await db.crisis_logs.insert_one({
+            'profileId': profile_id,
+            'message': message[:500],  # Truncate for privacy
+            'crisisLevel': crisis_level,
+            'matchedKeywords': matched_keywords,
+            'timestamp': datetime.utcnow(),
+            'handled': True
+        })
+    except Exception as e:
+        logger.error(f"Error logging crisis event: {str(e)}")
+
+# Crisis-aware system prompt addition
+CRISIS_SAFETY_PROMPT = """
+CRITICAL SAFETY GUIDELINES:
+- If the user expresses thoughts of self-harm, suicide, or harming others, your TOP PRIORITY is their safety
+- Acknowledge their feelings with compassion and without judgment
+- Gently encourage them to reach out to professional support (988 Lifeline, Crisis Text Line)
+- Do NOT minimize their feelings or offer toxic positivity
+- Do NOT promise confidentiality if they're in danger
+- Keep the conversation open and supportive
+- Ask if they're safe right now
+- Never suggest self-harm is a solution to anything
+"""
 
 # ...
 
@@ -441,7 +567,9 @@ async def get_ai_response(conversation_id: str, user_message: str, conversation_
             - Ask ONE thoughtful follow-up question that shows you're listening
             - Validate their emotions without being preachy
             - Keep responses SHORT (2-3 sentences max)
-            - Sound like a caring friend, not a therapist or app"""
+            - Sound like a caring friend, not a therapist or app
+
+            {CRISIS_SAFETY_PROMPT}"""
 
         elif conversation_type == "personality_test":
             system_message = f"""You are MindfulMe's Personality Assessor.
@@ -480,7 +608,9 @@ async def get_ai_response(conversation_id: str, user_message: str, conversation_
             - Ask one thoughtful follow-up question
             - Validate emotions without being preachy
             - Match their energy - if they're casual, be casual
-            - If they seem stressed, be extra gentle"""
+            - If they seem stressed, be extra gentle
+
+            {CRISIS_SAFETY_PROMPT}"""
         
         # Select model based on conversation type
         model = "openrouter/anthropic/claude-4.5-sonnet"
@@ -680,20 +810,47 @@ async def send_message(data: MessageCreate):
         conversation = await db.conversations.find_one({'_id': ObjectId(data.conversationId)})
         if not conversation:
             raise HTTPException(status_code=404, detail="Conversation not found")
-        
+
         # Add user message
         user_message = Message(
             role="user",
             content=data.content,
             hasVoice=data.hasVoice
         )
-        
-        # Get AI response
-        ai_response_text = await get_ai_response(
-            data.conversationId,
-            data.content,
-            conversation['type']
-        )
+
+        # Check for crisis indicators
+        crisis_check = detect_crisis_level(data.content)
+        profile = await get_or_create_profile()
+
+        if crisis_check['level'] in ['high', 'medium']:
+            # Log crisis event for safety
+            asyncio.create_task(log_crisis_event(
+                profile['id'],
+                data.content,
+                crisis_check['level'],
+                crisis_check['matched_keywords']
+            ))
+
+            # For high-risk messages, provide immediate crisis response
+            if crisis_check['level'] == 'high':
+                ai_response_text = get_crisis_response('high')
+            else:
+                # For medium risk, get AI response but it will be crisis-aware
+                ai_response_text = await get_ai_response(
+                    data.conversationId,
+                    data.content,
+                    conversation['type']
+                )
+                # Prepend supportive message with resources
+                crisis_preface = get_crisis_response('medium')
+                ai_response_text = f"{crisis_preface}\n\n{ai_response_text}"
+        else:
+            # Normal response path
+            ai_response_text = await get_ai_response(
+                data.conversationId,
+                data.content,
+                conversation['type']
+            )
         
         # Add assistant message
         assistant_message = Message(
@@ -756,6 +913,78 @@ async def get_today_journal():
     today = datetime.utcnow().strftime('%Y-%m-%d')
     journal = await db.journals.find_one({'date': today})
     return serialize_doc(journal) if journal else None
+
+# Crisis resources endpoint
+# Session feedback endpoint
+class SessionFeedback(BaseModel):
+    conversationId: str
+    feedback: str  # 'helpful', 'neutral', 'skip'
+    mood: Optional[str] = None
+    sessionDuration: int = 0
+    messageCount: int = 0
+
+@api_router.post("/session-feedback")
+async def submit_session_feedback(data: SessionFeedback):
+    """Store session feedback for analytics and improvement"""
+    try:
+        feedback_doc = {
+            'conversationId': data.conversationId,
+            'feedback': data.feedback,
+            'mood': data.mood,
+            'sessionDuration': data.sessionDuration,
+            'messageCount': data.messageCount,
+            'timestamp': datetime.utcnow()
+        }
+        await db.session_feedback.insert_one(feedback_doc)
+
+        # Also log mood if provided
+        if data.mood:
+            mood_intensity = {'amazing': 9, 'happy': 8, 'calm': 7, 'okay': 5, 'sad': 3, 'anxious': 2}.get(data.mood, 5)
+            mood_log = MoodLog(
+                mood=data.mood,
+                intensity=mood_intensity,
+                note=f"Post-session ({data.feedback})"
+            )
+            await db.moods.insert_one(mood_log.dict(exclude={'id'}))
+
+        return {"status": "success", "message": "Feedback recorded"}
+    except Exception as e:
+        logger.error(f"Session feedback error: {str(e)}")
+        return {"status": "error", "message": str(e)}
+
+@api_router.get("/crisis-resources")
+async def get_crisis_resources():
+    """Get crisis intervention resources"""
+    return {
+        "resources": CRISIS_RESOURCES,
+        "message": "If you're experiencing a crisis, please reach out to one of these resources. You're not alone.",
+        "hotlines": [
+            {
+                "name": "988 Suicide & Crisis Lifeline",
+                "number": "988",
+                "description": "Free, confidential support 24/7",
+                "type": "call_or_text"
+            },
+            {
+                "name": "Crisis Text Line",
+                "number": "741741",
+                "description": "Text HOME to start",
+                "type": "text"
+            },
+            {
+                "name": "Emergency Services",
+                "number": "911",
+                "description": "For immediate emergencies",
+                "type": "call"
+            },
+            {
+                "name": "SAMHSA National Helpline",
+                "number": "1-800-662-4357",
+                "description": "Mental health and substance abuse",
+                "type": "call"
+            }
+        ]
+    }
 
 # Mood endpoints
 @api_router.post("/moods")
@@ -1153,12 +1382,12 @@ async def get_journal_prompt():
             mood = recent_moods[0].get('mood', 'okay')
             context_parts.append(f"Recent mood: {mood}")
 
-        # Generate prompt using AI
+        # Generate prompt using DeepSeek V3 (more cost effective for simple generation)
         if acompletion and context_parts:
             try:
                 context = " | ".join(context_parts)
                 response = await acompletion(
-                    model="openrouter/anthropic/claude-4.5-sonnet",
+                    model="openrouter/deepseek/deepseek-chat",  # DeepSeek V3
                     messages=[
                         {
                             "role": "system",
@@ -1211,6 +1440,91 @@ async def get_journal_prompt():
     except Exception as e:
         logger.error(f"Journal prompt error: {str(e)}")
         return {"prompt": "What's on your mind today?"}
+
+# Reflection cards generation (uses DeepSeek V3)
+class ReflectionRequest(BaseModel):
+    journalContent: str
+    conversationHistory: List[dict] = []
+
+@api_router.post("/reflection-cards")
+async def generate_reflection_cards(data: ReflectionRequest):
+    """Generate reflection cards based on journal entry using DeepSeek V3"""
+    try:
+        if not acompletion:
+            return {
+                "cards": [
+                    {"type": "theme", "title": "Theme", "content": "Keep journaling to discover your themes."},
+                    {"type": "tone", "title": "Emotional Tone", "content": "Your feelings are valid."},
+                    {"type": "suggestion", "title": "Suggestion", "content": "Try to journal again tomorrow."}
+                ]
+            }
+
+        # Build conversation context
+        conversation_text = data.journalContent
+        if data.conversationHistory:
+            messages_text = [m.get('content', '') for m in data.conversationHistory if m.get('role') == 'user']
+            conversation_text = ' | '.join(messages_text[-5:]) + ' | ' + data.journalContent
+
+        response = await acompletion(
+            model="openrouter/deepseek/deepseek-chat",  # DeepSeek V3
+            messages=[
+                {
+                    "role": "system",
+                    "content": """Analyze this journal entry and generate exactly 3 reflection cards in JSON format.
+
+                    Return ONLY valid JSON with this structure:
+                    {
+                        "cards": [
+                            {"type": "theme", "title": "Key Theme", "content": "1-2 sentence insight about the main theme"},
+                            {"type": "tone", "title": "Emotional Tone", "content": "1-2 sentence observation about emotional patterns"},
+                            {"type": "suggestion", "title": "Reflection Prompt", "content": "1 thoughtful question or gentle suggestion"}
+                        ]
+                    }
+
+                    Guidelines:
+                    - Be warm and supportive, not clinical
+                    - Identify patterns gently, not judgmentally
+                    - Make suggestions feel like invitations, not prescriptions
+                    - Keep each content under 50 words"""
+                },
+                {"role": "user", "content": f"Journal entry: {conversation_text}"}
+            ],
+            api_key=OPENROUTER_API_KEY,
+            max_tokens=300
+        )
+
+        try:
+            result_text = response.choices[0].message.content.strip()
+            # Try to parse JSON from the response
+            if result_text.startswith('```json'):
+                result_text = result_text[7:]
+            if result_text.startswith('```'):
+                result_text = result_text[3:]
+            if result_text.endswith('```'):
+                result_text = result_text[:-3]
+
+            result = json.loads(result_text.strip())
+            return result
+        except json.JSONDecodeError:
+            logger.error(f"Failed to parse reflection cards JSON: {result_text}")
+            # Return default cards
+            return {
+                "cards": [
+                    {"type": "theme", "title": "Your Journey", "content": "Every journal entry is a step toward self-understanding."},
+                    {"type": "tone", "title": "Emotional Awareness", "content": "Taking time to reflect shows self-compassion."},
+                    {"type": "suggestion", "title": "Next Step", "content": "What would you like to explore more deeply?"}
+                ]
+            }
+
+    except Exception as e:
+        logger.error(f"Reflection cards error: {str(e)}")
+        return {
+            "cards": [
+                {"type": "theme", "title": "Your Journey", "content": "Every journal entry is a step toward self-understanding."},
+                {"type": "tone", "title": "Emotional Awareness", "content": "Taking time to reflect shows self-compassion."},
+                {"type": "suggestion", "title": "Next Step", "content": "What would you like to explore more deeply?"}
+            ]
+        }
 
 # Include router
 app.include_router(api_router)

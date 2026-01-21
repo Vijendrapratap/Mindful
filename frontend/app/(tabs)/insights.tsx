@@ -46,21 +46,43 @@ const MOOD_COLORS: Record<string, string> = {
 };
 
 const MOOD_EMOJIS: Record<string, string> = {
+  amazing: '🤩',
   great: '😊',
   good: '🙂',
+  happy: '😊',
+  calm: '😌',
   okay: '😐',
   low: '😔',
+  sad: '😔',
   anxious: '😰',
-  happy: '😊',
-  sad: '😢',
-  calm: '😌',
 };
+
+// Mood value mapping for graph (higher = better)
+const MOOD_VALUES: Record<string, number> = {
+  amazing: 10,
+  great: 9,
+  happy: 8,
+  calm: 7,
+  good: 6,
+  okay: 5,
+  low: 3,
+  sad: 2,
+  anxious: 2,
+};
+
+interface DailyMood {
+  date: string;
+  dayLabel: string;
+  mood: string | null;
+  value: number;
+}
 
 export default function InsightsScreen() {
   const router = useRouter();
   const [profile, setProfile] = useState<any>(null);
   const [insights, setInsights] = useState<InsightData[]>([]);
   const [moodStats, setMoodStats] = useState<any>(null);
+  const [weeklyMoods, setWeeklyMoods] = useState<DailyMood[]>([]);
   const [recentSessions, setRecentSessions] = useState<SessionSummary[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -77,9 +99,47 @@ export default function InsightsScreen() {
       loadProfile(),
       loadInsights(),
       loadMoodStats(),
+      loadWeeklyMoods(),
       loadRecentSessions(),
     ]);
     setLoading(false);
+  };
+
+  const loadWeeklyMoods = async () => {
+    try {
+      const response = await fetch(`${API_URL}/api/moods?days=7`);
+      if (response.ok) {
+        const moods = await response.json();
+
+        // Create 7-day array
+        const days: DailyMood[] = [];
+        const today = new Date();
+        const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+        for (let i = 6; i >= 0; i--) {
+          const date = new Date(today);
+          date.setDate(date.getDate() - i);
+          const dateStr = date.toISOString().split('T')[0];
+          const dayLabel = i === 0 ? 'Today' : i === 1 ? 'Yest' : dayNames[date.getDay()];
+
+          // Find mood for this day
+          const dayMood = moods.find((m: any) => {
+            const moodDate = new Date(m.timestamp).toISOString().split('T')[0];
+            return moodDate === dateStr;
+          });
+
+          days.push({
+            date: dateStr,
+            dayLabel,
+            mood: dayMood?.mood || null,
+            value: dayMood ? (MOOD_VALUES[dayMood.mood] || 5) : 0,
+          });
+        }
+        setWeeklyMoods(days);
+      }
+    } catch (e) {
+      console.error('Error loading weekly moods:', e);
+    }
   };
 
   const onRefresh = async () => {
@@ -168,26 +228,75 @@ export default function InsightsScreen() {
   };
 
   const renderMoodTrend = () => {
-    const bars = getMoodDistributionBars();
-    if (!bars || bars.length === 0) {
+    const hasData = weeklyMoods.some(d => d.mood !== null);
+
+    if (!hasData) {
       return (
         <View style={styles.emptyMood}>
           <MaterialCommunityIcons name="chart-line" size={32} color={Colors.dark.textMuted} />
           <Typo variant="caption" color={Colors.dark.textMuted} style={{ marginTop: 8 }}>
-            Log moods to see your trend
+            Log moods to see your 7-day trend
           </Typo>
         </View>
       );
     }
 
+    const graphHeight = 100;
+    const pointSpacing = (width - 80) / 6;
+
     return (
-      <View style={styles.moodBars}>
-        {bars.map(({ mood, percentage, color }) => (
-          <View key={mood} style={styles.moodBarContainer}>
-            <View style={[styles.moodBar, { height: `${Math.max(percentage, 10)}%`, backgroundColor: color }]} />
-            <Typo variant="caption" style={{ marginTop: 4 }}>{MOOD_EMOJIS[mood] || '😐'}</Typo>
+      <View style={styles.moodGraph}>
+        {/* Graph Lines */}
+        <View style={styles.graphContainer}>
+          {/* Y-axis labels */}
+          <View style={styles.yAxis}>
+            <Typo variant="caption" color={Colors.dark.textMuted}>😊</Typo>
+            <Typo variant="caption" color={Colors.dark.textMuted}>😐</Typo>
+            <Typo variant="caption" color={Colors.dark.textMuted}>😔</Typo>
           </View>
-        ))}
+
+          {/* Graph area */}
+          <View style={styles.graphArea}>
+            {/* Grid lines */}
+            <View style={[styles.gridLine, { top: 0 }]} />
+            <View style={[styles.gridLine, { top: graphHeight / 2 }]} />
+            <View style={[styles.gridLine, { top: graphHeight }]} />
+
+            {/* Data points and connecting lines */}
+            {weeklyMoods.map((day, index) => {
+              if (day.value === 0) return null;
+              const y = graphHeight - (day.value / 10) * graphHeight;
+              const x = index * pointSpacing;
+              const color = MOOD_COLORS[day.mood || 'okay'] || Colors.dark.primary;
+
+              return (
+                <View
+                  key={day.date}
+                  style={[
+                    styles.dataPoint,
+                    {
+                      left: x,
+                      top: y - 6,
+                      backgroundColor: color,
+                    }
+                  ]}
+                />
+              );
+            })}
+          </View>
+        </View>
+
+        {/* X-axis labels */}
+        <View style={styles.xAxis}>
+          {weeklyMoods.map((day) => (
+            <View key={day.date} style={styles.xAxisLabel}>
+              <Typo variant="caption" color={Colors.dark.textMuted}>{day.dayLabel}</Typo>
+              {day.mood && (
+                <Typo variant="caption">{MOOD_EMOJIS[day.mood]}</Typo>
+              )}
+            </View>
+          ))}
+        </View>
       </View>
     );
   };
@@ -461,5 +570,48 @@ const styles = StyleSheet.create({
     padding: 16,
     borderRadius: 20,
     alignItems: 'center',
+  },
+  moodGraph: {
+    paddingTop: 16,
+  },
+  graphContainer: {
+    flexDirection: 'row',
+    height: 100,
+  },
+  yAxis: {
+    width: 24,
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 4,
+  },
+  graphArea: {
+    flex: 1,
+    position: 'relative',
+    marginLeft: 8,
+  },
+  gridLine: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    height: 1,
+    backgroundColor: Colors.dark.glassBorder,
+  },
+  dataPoint: {
+    position: 'absolute',
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    borderWidth: 2,
+    borderColor: Colors.dark.surface,
+  },
+  xAxis: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingLeft: 32,
+    paddingTop: 8,
+  },
+  xAxisLabel: {
+    alignItems: 'center',
+    width: 40,
   },
 });

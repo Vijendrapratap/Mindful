@@ -12,6 +12,7 @@ import {
   Dimensions,
   TextInput,
   Animated,
+  Modal,
 } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -45,6 +46,8 @@ export default function TalkScreen() {
   const [sessionStarted, setSessionStarted] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [showTextInput, setShowTextInput] = useState(false);
+  const [showFeedbackModal, setShowFeedbackModal] = useState(false);
+  const [sessionMood, setSessionMood] = useState<string | null>(null);
   const scrollViewRef = useRef<ScrollView>(null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const waveAnim = useRef(new Animated.Value(0)).current;
@@ -301,30 +304,51 @@ export default function TalkScreen() {
   };
 
   const endSession = () => {
-    Alert.alert(
-      'End Session',
-      'Would you like to end this conversation and start fresh?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'End Session',
-          style: 'destructive',
-          onPress: async () => {
-            if (timerRef.current) {
-              clearInterval(timerRef.current);
-              timerRef.current = null;
-            }
-            Speech.stop();
-            await AsyncStorage.removeItem('currentTalkConversation');
-            setMessages([]);
-            setConversationId(null);
-            setSessionTimer(0);
-            setSessionStarted(false);
-            await createNewConversation();
-          },
-        },
-      ]
-    );
+    if (sessionStarted && messages.length > 0) {
+      // Show feedback modal before ending
+      setShowFeedbackModal(true);
+    } else {
+      // No session to end, just reset
+      resetSession();
+    }
+  };
+
+  const submitFeedback = async (feedback: 'helpful' | 'neutral' | 'skip', mood?: string) => {
+    try {
+      // Submit session feedback to backend
+      if (feedback !== 'skip') {
+        await fetch(`${API_URL}/api/session-feedback`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            conversationId,
+            feedback,
+            mood: mood || sessionMood,
+            sessionDuration: sessionTimer,
+            messageCount: messages.length,
+          }),
+        });
+      }
+    } catch (e) {
+      console.error('Error submitting feedback:', e);
+    }
+    setShowFeedbackModal(false);
+    resetSession();
+  };
+
+  const resetSession = async () => {
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+    Speech.stop();
+    await AsyncStorage.removeItem('currentTalkConversation');
+    setMessages([]);
+    setConversationId(null);
+    setSessionTimer(0);
+    setSessionStarted(false);
+    setSessionMood(null);
+    await createNewConversation();
   };
 
   const toggleMute = () => {
@@ -533,6 +557,79 @@ export default function TalkScreen() {
           </Typo>
         </View>
       </KeyboardAvoidingView>
+
+      {/* Post-Session Feedback Modal */}
+      <Modal visible={showFeedbackModal} animationType="fade" transparent>
+        <View style={styles.modalOverlay}>
+          <GlassView intensity={95} style={styles.feedbackModal}>
+            <Typo variant="h3" weight="bold" align="center" style={{ marginBottom: 8 }}>
+              How was this session?
+            </Typo>
+            <Typo variant="body" color={Colors.dark.textMuted} align="center" style={{ marginBottom: 24 }}>
+              Your feedback helps me improve
+            </Typo>
+
+            {/* Feedback Options */}
+            <View style={styles.feedbackOptions}>
+              <TouchableOpacity
+                style={styles.feedbackOption}
+                onPress={() => submitFeedback('helpful')}
+              >
+                <View style={[styles.feedbackIcon, { backgroundColor: Colors.dark.success + '20' }]}>
+                  <MaterialCommunityIcons name="thumb-up" size={28} color={Colors.dark.success} />
+                </View>
+                <Typo variant="body" weight="medium">Helpful</Typo>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.feedbackOption}
+                onPress={() => submitFeedback('neutral')}
+              >
+                <View style={[styles.feedbackIcon, { backgroundColor: Colors.dark.moodOkay + '20' }]}>
+                  <MaterialCommunityIcons name="minus" size={28} color={Colors.dark.moodOkay} />
+                </View>
+                <Typo variant="body" weight="medium">Neutral</Typo>
+              </TouchableOpacity>
+            </View>
+
+            {/* Mood Selection */}
+            <Typo variant="body" color={Colors.dark.textMuted} align="center" style={{ marginTop: 24, marginBottom: 12 }}>
+              How are you feeling now?
+            </Typo>
+            <View style={styles.moodRow}>
+              {[
+                { id: 'amazing', emoji: '🤩', color: Colors.dark.moodAmazing },
+                { id: 'happy', emoji: '😊', color: Colors.dark.moodHappy },
+                { id: 'calm', emoji: '😌', color: Colors.dark.moodCalm },
+                { id: 'okay', emoji: '😐', color: Colors.dark.moodOkay },
+                { id: 'sad', emoji: '😔', color: Colors.dark.moodSad },
+              ].map((mood) => (
+                <TouchableOpacity
+                  key={mood.id}
+                  onPress={() => setSessionMood(mood.id)}
+                  style={[
+                    styles.moodButton,
+                    sessionMood === mood.id && {
+                      backgroundColor: mood.color + '30',
+                      borderColor: mood.color,
+                    }
+                  ]}
+                >
+                  <Typo variant="h3">{mood.emoji}</Typo>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            {/* Skip Button */}
+            <TouchableOpacity
+              onPress={() => submitFeedback('skip')}
+              style={styles.skipFeedbackButton}
+            >
+              <Typo variant="caption" color={Colors.dark.textMuted}>Skip for now</Typo>
+            </TouchableOpacity>
+          </GlassView>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -697,5 +794,55 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     overflow: 'hidden',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  feedbackModal: {
+    width: '100%',
+    padding: 24,
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: Colors.dark.glassBorder,
+  },
+  feedbackOptions: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 24,
+  },
+  feedbackOption: {
+    alignItems: 'center',
+    gap: 8,
+  },
+  feedbackIcon: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  moodRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 12,
+  },
+  moodButton: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: Colors.dark.surface,
+    borderWidth: 2,
+    borderColor: Colors.dark.glassBorder,
+  },
+  skipFeedbackButton: {
+    marginTop: 20,
+    alignItems: 'center',
+    padding: 8,
   },
 });
