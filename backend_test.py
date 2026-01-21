@@ -9,9 +9,10 @@ import json
 from datetime import datetime, timedelta
 import time
 import sys
+import os
 
-# Get backend URL from environment
-BACKEND_URL = "https://mindfulme-app.preview.emergentagent.com/api"
+# Get backend URL from environment variable or use localhost default
+BACKEND_URL = os.environ.get('BACKEND_URL', 'http://localhost:8001/api')
 
 class MindfulMeAPITester:
     def __init__(self):

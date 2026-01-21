@@ -22,7 +22,7 @@
 
 - [ ] **Generate secure API keys**
   ```bash
-  # For production, use dedicated Emergent LLM key
+  # For production, use dedicated OpenRouter API key
   # Never commit actual keys to Git
   ```
 
@@ -49,7 +49,7 @@ Create production `.env` files:
 ```bash
 MONGO_URL=mongodb://user:pass@mongodb:27017/mindfulme?authSource=admin
 DB_NAME=mindfulme
-EMERGENT_LLM_KEY=sk-emergent-PRODUCTION-KEY-HERE
+OPENROUTER_API_KEY=sk-or-PRODUCTION-KEY-HERE
 ENVIRONMENT=production
 ```
 
@@ -162,7 +162,7 @@ spec:
             secretKeyRef:
               name: mindfulme-secrets
               key: mongo-url
-        - name: EMERGENT_LLM_KEY
+        - name: OPENROUTER_API_KEY
           valueFrom:
             secretKeyRef:
               name: mindfulme-secrets
@@ -272,7 +272,7 @@ spec:
    - Add:
      - `DOCKER_USERNAME`
      - `DOCKER_PASSWORD`
-     - `EMERGENT_LLM_KEY`
+     - `OPENROUTER_API_KEY`
      - `SSH_PRIVATE_KEY` (for deployment)
      - `SERVER_HOST`
 

@@ -116,8 +116,9 @@ GET  /api/knowledge/graph     # Full graph data
 **Backend:**
 - FastAPI (Python 3.11)
 - Motor (Async MongoDB driver)
-- Claude AI (via Emergent LLM Key)
-- emergentintegrations library
+- LiteLLM (Multi-provider AI gateway)
+- OpenAI SDK (for Whisper transcription)
+- Claude AI & DeepSeek V3 (via OpenRouter)
 
 **Database:**
 - MongoDB 7.0
